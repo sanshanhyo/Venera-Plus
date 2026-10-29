@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -23,13 +24,18 @@ class VolumePageScope extends StatefulWidget {
   final VoidCallback onNext;
   final Widget child;
 
+  /// Allows widget tests to install a simulated Android platform channel.
+  /// Native availability normally follows the running OS, not Theme.platform.
+  @visibleForTesting
+  static bool? debugPlatformSupportedOverride;
+
   @override
   State<VolumePageScope> createState() => _VolumePageScopeState();
 }
 
 class _VolumePageScopeState extends State<VolumePageScope> {
   final _routes = <ModalRoute<dynamic>>[];
-  bool _tickerEnabled = false;
+  ValueListenable<TickerModeData>? _tickerMode;
   bool _attached = true;
 
   bool get canHandle =>
@@ -37,7 +43,7 @@ class _VolumePageScopeState extends State<VolumePageScope> {
       _attached &&
       widget.enabled &&
       widget.active &&
-      _tickerEnabled &&
+      (_tickerMode?.value.enabled ?? false) &&
       _routes.every((route) => route.isCurrent);
 
   @override
@@ -49,7 +55,7 @@ class _VolumePageScopeState extends State<VolumePageScope> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _tickerEnabled = TickerMode.valuesOf(context).enabled;
+    _updateTickerMode();
     _routes.clear();
     final ownRoute = ModalRoute.of(context);
     if (ownRoute != null) _routes.add(ownRoute);
@@ -78,6 +84,7 @@ class _VolumePageScopeState extends State<VolumePageScope> {
   void activate() {
     super.activate();
     _attached = true;
+    _updateTickerMode();
     _VolumeNavigation.instance.refresh();
   }
 
@@ -90,12 +97,21 @@ class _VolumePageScopeState extends State<VolumePageScope> {
 
   @override
   void dispose() {
+    _tickerMode?.removeListener(_VolumeNavigation.instance.refresh);
     _VolumeNavigation.instance.remove(this);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => widget.child;
+
+  void _updateTickerMode() {
+    final notifier = TickerMode.getValuesNotifier(context);
+    if (identical(notifier, _tickerMode)) return;
+    _tickerMode?.removeListener(_VolumeNavigation.instance.refresh);
+    _tickerMode = notifier;
+    notifier.addListener(_VolumeNavigation.instance.refresh);
+  }
 }
 
 /// Install once on each Navigator that can cover a volume-controlled page.
@@ -103,6 +119,11 @@ class VolumeNavigationObserver extends NavigatorObserver {
   @override
   void didChangeTop(Route<dynamic> topRoute, Route<dynamic>? previousTopRoute) {
     _VolumeNavigation.instance.refresh();
+    // Navigator updates its Overlay/TickerMode after announcing the new top
+    // route. Re-evaluate after that frame as well, including dialog dismissal.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _VolumeNavigation.instance.refresh();
+    });
   }
 }
 
@@ -116,7 +137,8 @@ class _VolumeNavigation with WidgetsBindingObserver {
   AppLifecycleState? _lifecycle;
 
   bool get _supported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      VolumePageScope.debugPlatformSupportedOverride ??
+      (!kIsWeb && Platform.isAndroid);
 
   bool get _editing {
     final context = FocusManager.instance.primaryFocus?.context;
