@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,7 +15,8 @@ void main() {
     subscriptions = 0;
     maxSubscriptions = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
+        .setMockMessageHandler(channel.name, (message) {
+          final call = channel.codec.decodeMethodCall(message!);
           if (call.method == 'listen') {
             subscriptions++;
             if (subscriptions > maxSubscriptions) {
@@ -23,13 +25,13 @@ void main() {
           } else if (call.method == 'cancel') {
             subscriptions--;
           }
-          return null;
+          return SynchronousFuture(channel.codec.encodeSuccessEnvelope(null));
         });
   });
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, null);
+        .setMockMessageHandler(channel.name, null);
     VolumePageScope.debugPlatformSupportedOverride = null;
   });
 
@@ -48,14 +50,12 @@ void main() {
       // Otherwise a delayed cancellation can leak into the next test.
       await tester.pumpWidget(const SizedBox());
       await tester.pump();
-      await tester.binding.defaultBinaryMessenger.platformMessagesFinished;
       VolumePageScope.debugPlatformSupportedOverride = null;
     }
   }
 
   Future<void> settle(WidgetTester tester) async {
     await tester.pumpAndSettle();
-    await tester.binding.defaultBinaryMessenger.platformMessagesFinished;
     await tester.pump();
   }
 
@@ -71,7 +71,6 @@ void main() {
   Future<void> clear(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
-    await tester.binding.defaultBinaryMessenger.platformMessagesFinished;
     expect(subscriptions, 0);
   }
 
