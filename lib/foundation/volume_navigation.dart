@@ -29,6 +29,16 @@ class VolumePageScope extends StatefulWidget {
   @visibleForTesting
   static bool? debugPlatformSupportedOverride;
 
+  /// Whether the broker is reconciling a native subscription.
+  ///
+  /// EventChannel cancellation may return a completed future from the root
+  /// zone. Widget tests must let that zone run before pumping the remainder of
+  /// this channel's cancellation, rather than waiting on every platform channel.
+  @visibleForTesting
+  static bool get debugSynchronizationPending =>
+      _VolumeNavigation.instance._scheduled ||
+      _VolumeNavigation.instance._syncing;
+
   @override
   State<VolumePageScope> createState() => _VolumePageScopeState();
 }

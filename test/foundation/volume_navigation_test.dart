@@ -35,6 +35,23 @@ void main() {
     VolumePageScope.debugPlatformSupportedOverride = null;
   });
 
+  Future<void> settle(WidgetTester tester) async {
+    await tester.pumpAndSettle();
+    if (VolumePageScope.debugSynchronizationPending) {
+      // StreamController.broadcast cancels synchronously but returns Dart's
+      // shared completed future from Zone.root. Its await continuation cannot
+      // run while FakeAsync only drains its own microtasks. Let that root-zone
+      // continuation run, then pump the remaining volume-broker microtasks.
+      await tester.runAsync(() => Future<void>.value());
+      await tester.pumpAndSettle();
+    }
+    expect(
+      VolumePageScope.debugSynchronizationPending,
+      isFalse,
+      reason: 'the volume subscription reconciliation must finish',
+    );
+  }
+
   Future<void> withSimulatedPlatform(
     WidgetTester tester,
     Future<void> Function() body, {
@@ -49,14 +66,9 @@ void main() {
       // Dispose before the mock channel is removed, including failed cases.
       // Otherwise a delayed cancellation can leak into the next test.
       await tester.pumpWidget(const SizedBox());
-      await tester.pump();
+      await settle(tester);
       VolumePageScope.debugPlatformSupportedOverride = null;
     }
-  }
-
-  Future<void> settle(WidgetTester tester) async {
-    await tester.pumpAndSettle();
-    await tester.pump();
   }
 
   Future<void> emit(WidgetTester tester, int event) async {
@@ -70,7 +82,7 @@ void main() {
 
   Future<void> clear(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox());
-    await tester.pump();
+    await settle(tester);
     expect(subscriptions, 0);
   }
 
@@ -240,7 +252,7 @@ void main() {
             ),
           ),
         );
-        await tester.pumpAndSettle();
+        await settle(tester);
         await emit(tester, 2);
         expect(next, 1);
         for (final change in <VoidCallback>[
@@ -249,33 +261,33 @@ void main() {
           () => tickers = false,
         ]) {
           rebuild(change);
-          await tester.pumpAndSettle();
+          await settle(tester);
           expect(subscriptions, 0);
           await emit(tester, 2);
           expect(next, 1);
           rebuild(() => enabled = active = tickers = true);
-          await tester.pumpAndSettle();
+          await settle(tester);
           expect(subscriptions, 1);
         }
         focus.requestFocus();
-        await tester.pumpAndSettle();
+        await settle(tester);
         expect(subscriptions, 0);
         await emit(tester, 2);
         expect(next, 1);
         focus.unfocus();
-        await tester.pumpAndSettle();
+        await settle(tester);
         expect(subscriptions, 1);
         tester.binding.handleAppLifecycleStateChanged(
           AppLifecycleState.inactive,
         );
-        await tester.pump();
+        await settle(tester);
         expect(subscriptions, 0);
         await emit(tester, 2);
         expect(next, 1);
         tester.binding.handleAppLifecycleStateChanged(
           AppLifecycleState.resumed,
         );
-        await tester.pump();
+        await settle(tester);
         await emit(tester, 2);
         expect(next, 2);
         await clear(tester);
@@ -283,4 +295,43 @@ void main() {
       });
     },
   );
+
+  testWidgets('restoring a page while cancellation is pending reopens keys', (
+    tester,
+  ) async {
+    await withSimulatedPlatform(tester, () async {
+      var enabled = true;
+      var next = 0;
+      late StateSetter rebuild;
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorObservers: [VolumeNavigationObserver()],
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return VolumePageScope(
+                enabled: enabled,
+                onPrevious: () {},
+                onNext: () => next++,
+                child: const SizedBox(),
+              );
+            },
+          ),
+        ),
+      );
+      await settle(tester);
+      expect(subscriptions, 1);
+      rebuild(() => enabled = false);
+      await tester.pump();
+      expect(subscriptions, 0);
+      expect(VolumePageScope.debugSynchronizationPending, isTrue);
+      rebuild(() => enabled = true);
+      await settle(tester);
+      expect(subscriptions, 1);
+      await emit(tester, 2);
+      expect(next, 1);
+      expect(maxSubscriptions, 1);
+      await clear(tester);
+    });
+  });
 }
