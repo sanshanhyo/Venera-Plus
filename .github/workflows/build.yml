@@ -11,6 +11,10 @@ on:
         required: false
         type: boolean
         default: true
+      build_android_preview:
+        required: false
+        type: boolean
+        default: false
       build_windows:
         required: false
         type: boolean
@@ -43,6 +47,11 @@ on:
         required: true
         type: boolean
         default: true
+      build_android_preview:
+        description: '构建可独立安装的 Android 测试版'
+        required: false
+        type: boolean
+        default: false
       build_windows:
         description: '构建 Windows'
         required: true
@@ -82,6 +91,9 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     env:
+      # A direct feature push has no inputs. Reusable calls keep their explicit
+      # default false even when the caller itself was triggered by that push.
+      VENERA_ANDROID_PREVIEW: ${{ inputs.build_android_preview || (github.event_name == 'push' && github.ref == 'refs/heads/feat/cloud-home-better-crawler' && !contains(toJSON(inputs), '"build_android_preview"')) }}
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"

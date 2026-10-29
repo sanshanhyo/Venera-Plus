@@ -159,6 +159,8 @@ python .github/scripts/release_version.py --check
 
 ## Android 构建
 
+`feat/cloud-home-better-crawler` 分支的直接推送会由 GitHub Actions 自动选择独立测试版。手动或复用 `build.yml` 时，`build_android_preview` 默认是 `false`，保持主包；显式设为 `true` 才选择独立测试版。该输入只影响 Android，APK 仍使用原有 Actions artifact 名称。
+
 本地 release 签名文件放置在：
 
 ```text
@@ -185,6 +187,16 @@ fvm flutter build apk --release
 Flutter 3.41.4 的 Android Release 构建不要添加 `--no-pub`：该参数还会跳过按 Release 模式重新生成插件注册代码，导致 `GeneratedPluginRegistrant.java` 可能仍引用已被发布编译排除的 `integration_test`。保留前置锁文件校验；两个 Android Release 工作流会在构建后检查 `pubspec.lock` 未变化。详见 [Flutter #163774](https://github.com/flutter/flutter/issues/163774)。
 
 构建产物通常位于 `build/app/outputs/apk/release/`。
+
+需要与正式版并行使用的 Android 测试包时，在 GitHub Actions 的 Android 构建环境中设置
+`VENERA_ANDROID_PREVIEW=true`。该开关使用应用标识
+`com.github.veneraworks.veneraplus.preview`，桌面名称为“Venera Plus 测试版”；
+正式版与测试版分别保存应用数据。开关未设置或为 `false` 时仍构建原来的
+`com.github.veneraworks.veneraplus`。两种构建继续使用相同的构建命令、ABI 版本码规则和
+产物路径；下载时需按工作流标注区分测试包。开关只接受 `true` 或 `false`。
+
+不同签名的安装包不能保留数据覆盖更新。测试包使用独立应用标识以便与已安装的正式版并存；
+后续要覆盖更新同一测试包，也需要沿用它首次安装时的签名密钥。
 
 签名文件和密码属于敏感信息，不应提交到仓库。
 
