@@ -442,6 +442,15 @@ class WebDavLibraryCache {
     );
   }
 
+  /// A directory browser can observe a changed file without running the
+  /// recursive indexer. Keep its identity/membership while rebuilding details.
+  void invalidateSnapshot(String configKey, String id) {
+    _database.execute(
+      'UPDATE webdav_library_comics SET snapshot_json = NULL WHERE config_key = ? AND id = ?;',
+      [configKey, id],
+    );
+  }
+
   int lastSuccessfulSync(String configKey) {
     final rows = _database.select(
       'SELECT last_successful_sync FROM webdav_library_state WHERE config_key = ?;',

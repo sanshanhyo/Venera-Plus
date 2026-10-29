@@ -23,6 +23,7 @@ import 'foundation/appdata.dart';
 import 'foundation/context.dart';
 import 'foundation/js_engine.dart';
 import 'foundation/startup_timing.dart';
+import 'foundation/volume_navigation.dart';
 import 'features/sync/sync.dart';
 
 void main(List<String> args) {
@@ -102,6 +103,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  final _volumeNavigationObserver = VolumeNavigationObserver();
   AndroidDownloads? _downloads;
   WindowHotkeyController? _windowHotkey;
   @override
@@ -313,6 +315,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           debugShowCheckedModeBanner: false,
           theme: getTheme(primary, secondary, tertiary, Brightness.light),
           navigatorKey: App.rootNavigatorKey,
+          navigatorObservers: [_volumeNavigationObserver],
           darkTheme: getTheme(primary, secondary, tertiary, Brightness.dark),
           themeMode: switch (appdata.settings['theme_mode']) {
             'light' => ThemeMode.light,

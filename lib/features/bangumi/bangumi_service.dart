@@ -238,20 +238,21 @@ class BangumiService {
       _runConnection(() => _gateway().getSubjectPersons(subjectId));
   Future<BangumiSubject?> matchSubjectForMetadata(String directoryTitle) async {
     final hints = _metadataTitleHints(directoryTitle);
-    if (hints.title.isEmpty) return null;
-    final results = await _runConnection(
-      () => _gateway().searchSubjects(hints.title),
-      priority: _BangumiRequestPriority.metadata,
-    );
-    final normalizedTitle = _normalizeMetadataMatchValue(hints.title);
-    final exact = <BangumiSubject>[];
-    final ids = <int>{};
-    for (final subject in results) {
-      if (subject.id <= 0 || !ids.add(subject.id)) continue;
-      if (_normalizeMetadataMatchValue(subject.title) == normalizedTitle ||
-          _normalizeMetadataMatchValue(subject.originalTitle) ==
-              normalizedTitle) {
-        exact.add(subject);
+    if (hints.titles.isEmpty) return null;
+    final exact = <int, BangumiSubject>{};
+    for (final title in hints.titles) {
+      final results = await _runConnection(
+        () => _gateway().searchSubjects(title),
+        priority: _BangumiRequestPriority.metadata,
+      );
+      final normalizedTitle = _normalizeMetadataMatchValue(title);
+      for (final subject in results) {
+        if (subject.id <= 0) continue;
+        if (_normalizeMetadataMatchValue(subject.title) == normalizedTitle ||
+            _normalizeMetadataMatchValue(subject.originalTitle) ==
+                normalizedTitle) {
+          exact[subject.id] = subject;
+        }
       }
     }
     if (exact.isEmpty || (exact.length > 1 && hints.author == null)) {
@@ -259,7 +260,7 @@ class BangumiService {
     }
 
     final matched = <BangumiSubject>[];
-    for (final candidate in exact) {
+    for (final candidate in exact.values) {
       final detailed = await _runConnection(
         () => _gateway().getSubject(candidate.id),
         priority: _BangumiRequestPriority.metadata,
@@ -339,27 +340,51 @@ class BangumiService {
     r'^(.*?)(?:\[([^\[\]]+)\]|【([^【】]+)】)\s*$',
   );
   static final _metadataNoiseMarker = RegExp(
-    r'^(?:chinese|中文|无修正|dl版|完结|已完结|完結|已完結|'
+    r'^(?:chinese|(?:china|chinese)中文|中文|简体中文|繁体中文|簡體中文|繁體中文|'
+    r'english|英文(?:版)?|无修正|dl版|完结|已完结|完結|已完結|'
     r'全\d+(?:卷|册|冊)|kindle(?:版)?|高清(?:版)?|日文(?:版)?|日本語|'
     r'台版|台湾版|台灣版|典藏版|珍藏版|重制版|重製版|'
     r'(?:19|20)\d{2}(?:年)?(?:重制|重製|重制版|重製版|新版|修订版|修訂版)?)$',
     caseSensitive: false,
   );
+  static final _metadataVolumePackageMarker = RegExp(
+    r'^(?:(?:全|第)?\d+(?:[-–—~～至到]\d+)?(?:卷|册|冊)'
+    r'(?:完整版|完结版|完結版|完结|完結)?|'
+    r'\d+[-–—~～至到]\d+(?:卷|册|冊)?'
+    r'(?:完整版|完结版|完結版|完结|完結)?|'
+    r'完整版|完结版|完結版|全集|全套|complete)$',
+    caseSensitive: false,
+  );
+  static final _metadataFileExtension = RegExp(
+    r'\.(?:pdf|zip|cbz|epub|cbr|7z|cb7)$',
+    caseSensitive: false,
+  );
+  static final _metadataBracketPrefix = RegExp(
+    r'^(?:\[([^\[\]]+)\]|【([^【】]+)】)\s*(.+)$',
+  );
+  static final _metadataReleaseGroupMarker = RegExp(
+    r'^(?:[A-Z][A-Z0-9 ._-]{1,31}|'
+    r'[^【】\[\]]{0,24}(?:汉化组|漢化組|扫图组|掃圖組))$',
+  );
 
-  static ({String title, String? author}) _metadataTitleHints(String value) {
-    var remaining = value.trim();
+  static ({List<String> titles, String? author}) _metadataTitleHints(
+    String value,
+  ) {
+    var remaining = value.trim().replaceFirst(_metadataFileExtension, '');
     while (true) {
-      final match = _metadataLabeledNoiseSuffix.firstMatch(remaining);
-      if (match == null) break;
-      remaining = remaining.substring(0, match.start).trimRight();
-    }
-    while (true) {
+      final labeledNoise = _metadataLabeledNoiseSuffix.firstMatch(remaining);
+      if (labeledNoise != null) {
+        remaining = remaining.substring(0, labeledNoise.start).trimRight();
+        continue;
+      }
       final match = _metadataBracketSuffix.firstMatch(remaining);
       if (match == null) break;
-      final marker = (match.group(2) ?? match.group(3) ?? '').trim();
-      if (!_metadataNoiseMarker.hasMatch(
-        marker.replaceAll(RegExp(r'\s+'), ''),
-      )) {
+      final marker = (match.group(2) ?? match.group(3) ?? '').replaceAll(
+        RegExp(r'\s+'),
+        '',
+      );
+      if (!_metadataNoiseMarker.hasMatch(marker) &&
+          !_metadataVolumePackageMarker.hasMatch(marker)) {
         break;
       }
       remaining = match.group(1)!.trimRight();
@@ -380,7 +405,18 @@ class BangumiService {
         .replaceAll(RegExp(r'\s+'), ' ')
         .replaceFirst(RegExp(r'[\s\-—_·|｜,，;；]+$'), '')
         .trim();
-    return (title: title, author: author?.isEmpty == true ? null : author);
+    final titles = <String>[if (title.isNotEmpty) title];
+    final prefix = _metadataBracketPrefix.firstMatch(title);
+    if (prefix != null &&
+        _metadataReleaseGroupMarker.hasMatch(
+          (prefix.group(1) ?? prefix.group(2) ?? '').trim(),
+        )) {
+      final alternate = prefix.group(3)!.trim();
+      // A short publisher/group-looking prefix may also be part of a real
+      // title. Keep both candidates and reject competing exact subject IDs.
+      if (alternate.isNotEmpty) titles.add(alternate);
+    }
+    return (titles: titles, author: author?.isEmpty == true ? null : author);
   }
 
   static String _normalizeMetadataMatchValue(String value) => value

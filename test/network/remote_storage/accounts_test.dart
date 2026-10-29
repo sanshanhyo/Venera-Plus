@@ -104,6 +104,17 @@ void main() {
             'accountId': incoming.id,
             'directory': '/漫画 100%/CBZ/',
           },
+          'homeRemoteLocation': {'accountId': local.id, 'directory': '/Home/'},
+          'homeRemoteSources': [
+            {
+              'id': 'home-library',
+              'sourceKey': 'cloud_home_retained',
+              'accountId': incoming.id,
+              'directories': ['/Home/'],
+              'name': 'Cloud Home',
+              'autoRefresh': false,
+            },
+          ],
           remoteLibrariesSetting: [
             {
               'id': 'local-library',
@@ -139,6 +150,18 @@ void main() {
           'accountId': canonicalId,
           'directory': '/漫画 100%/CBZ/',
         });
+        expect(appdata.settings['homeRemoteLocation'], {
+          'accountId': canonicalId,
+          'directory': '/Home/',
+        });
+        expect(
+          appdata.settings['homeRemoteSources'].single['accountId'],
+          canonicalId,
+        );
+        expect(
+          appdata.settings['homeRemoteSources'].single['sourceKey'],
+          'cloud_home_retained',
+        );
         expect(storage.libraries.map((library) => library.id), [
           'local-library',
           'remote-library',

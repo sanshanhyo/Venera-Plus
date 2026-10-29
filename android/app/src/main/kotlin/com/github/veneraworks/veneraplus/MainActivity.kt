@@ -42,6 +42,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     var volumeListen = VolumeListen()
     var listening = false
+    private val consumedVolumeKeys = mutableSetOf<Int>()
 
     private val storageRequestCode = 0x10
     private var storagePermissionRequest: ((Boolean) -> Unit)? = null
@@ -338,20 +339,35 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Keep consuming a held key even if a page/dialog disables the listener
+        // between its first key-down and key-up.
+        if (keyCode in consumedVolumeKeys) return true
         if (listening) {
             when (keyCode) {
                 KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                    volumeListen.down()
+                    consumedVolumeKeys.add(keyCode)
+                    if ((event?.repeatCount ?: 0) == 0) volumeListen.down()
                     return true
                 }
 
                 KeyEvent.KEYCODE_VOLUME_UP -> {
-                    volumeListen.up()
+                    consumedVolumeKeys.add(keyCode)
+                    if ((event?.repeatCount ?: 0) == 0) volumeListen.up()
                     return true
                 }
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (consumedVolumeKeys.remove(keyCode)) return true
+        return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        if (!hasFocus) consumedVolumeKeys.clear()
+        super.onWindowFocusChanged(hasFocus)
     }
 
     /// Ensure that the directory is accessible by dart:io

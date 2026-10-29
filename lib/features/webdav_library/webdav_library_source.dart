@@ -889,7 +889,7 @@ class WebDavLibrarySource {
       DateTime.now().millisecondsSinceEpoch;
   static const _maxMetadataMergeAttempts = 3;
   static const _maxMetadataRetryAttempts = 4;
-  static const _defaultScraperVersion = '1';
+  static const _defaultScraperVersion = '2';
   static const _metadataPendingKey = 'webdavMetadataPending';
   static String get _metadataPendingStorageKey {
     final config = WebDavLibraryConfig.fromSettings();
@@ -2944,6 +2944,11 @@ class WebDavLibrarySource {
     ).hasMatch(normalized);
   }
 
+  /// Shared with the direct-directory home browser; this retains the existing
+  /// image-comic layout rules without introducing PDF chapter inference.
+  static bool isChapterDirectoryName(String name) =>
+      _looksLikeChapterName(name);
+
   static Future<List<_WebDavDiscoveredDirectory>> _discoverComicDirectories(
     WebDavLibraryConfig config, {
     required List<WebDavLibraryEntry> rootEntries,
@@ -3359,6 +3364,7 @@ class WebDavLibraryEngine {
   final RemoteFileStore _store;
   Timer? _autoRefreshTimer;
   bool _cancelled = false;
+  bool _directoryBrowser = false;
   late final _contexts = <String, _WebDavLibraryContext>{
     _context.config.remotePath: _context,
   };
@@ -3394,6 +3400,7 @@ class WebDavLibraryEngine {
       WebDavLibraryCache.instance.rootFailures(_context.config.cacheKey);
 
   bool matches(RemoteLibrary other, StorageAccount account) =>
+      !_cancelled &&
       library.id == other.id &&
       library.accountId == other.accountId &&
       library.name == other.name &&
@@ -3463,8 +3470,11 @@ class WebDavLibraryEngine {
   void initializeMetadataRetry() =>
       _run(WebDavLibrarySource.initializeMetadataRetry);
 
-  ComicSource create() {
-    initializeAutoRefresh();
+  /// Directory-home sources only provide the existing file reader. They do
+  /// not register an Explore page or start a recursive indexing task.
+  ComicSource create({bool directoryBrowser = false}) {
+    _directoryBrowser = directoryBrowser;
+    if (!directoryBrowser) initializeAutoRefresh();
     return ComicSource(
       library.name,
       library.sourceKey,
@@ -3472,19 +3482,21 @@ class WebDavLibraryEngine {
       null,
       null,
       null,
-      [
-        ExplorePageData(
-          library.name,
-          ExplorePageType.multiPageComicList,
-          (page) => _run(() => WebDavLibrarySource.loadComics(page)),
-          null,
-          null,
-          null,
-          changeListenable: contentVersion,
-          statusMessage: () => statusMessage,
-          onRefresh: () async => synchronize(force: true),
-        ),
-      ],
+      directoryBrowser
+          ? []
+          : [
+              ExplorePageData(
+                library.name,
+                ExplorePageType.multiPageComicList,
+                (page) => _run(() => WebDavLibrarySource.loadComics(page)),
+                null,
+                null,
+                null,
+                changeListenable: contentVersion,
+                statusMessage: () => statusMessage,
+                onRefresh: () async => synchronize(force: true),
+              ),
+            ],
       null,
       null,
       (id) => _run(() => WebDavLibrarySource.loadComicInfo(id)),
@@ -3523,6 +3535,7 @@ class WebDavLibraryEngine {
   }
 
   Future<Res<bool>> synchronize({bool force = false}) async {
+    if (_directoryBrowser) return const Res(true);
     Res<bool>? failure;
     for (final root in library.directories) {
       final result = await _runFor(
@@ -3534,6 +3547,44 @@ class WebDavLibraryEngine {
     if (failure != null) contentVersion.value++;
     return failure ?? const Res(true);
   }
+
+  /// Validate the cached reader snapshot against a directly listed file.
+  /// This does not discover siblings or change its comic/history identity.
+  Future<void> prepareDirectoryBrowserEntry(RemoteEntry entry) =>
+      _run(() async {
+        if (!_directoryBrowser || _cancelled) return;
+        final config = _context.config;
+        final id = entry.path;
+        final memoryKey = jsonEncode([config.cacheKey, id]);
+        try {
+          await _context.state.snapshotInFlight[memoryKey];
+        } catch (_) {
+          // A failed old snapshot should not block a fresh reading attempt.
+        }
+        if (_cancelled) return;
+        final cached = WebDavLibrarySource._cache.find(config.cacheKey, id);
+        final snapshot =
+            _context.state.snapshotCache[memoryKey] ??
+            (cached?.isReady == true
+                ? _WebDavComicSnapshot.fromJson(cached!.snapshot!)
+                : null);
+        if (snapshot == null) return;
+        final archive = snapshot.archive;
+        final validated =
+            entry.eTag?.isNotEmpty == true || entry.modifiedAt != null;
+        if (archive != null &&
+            validated &&
+            entry.size != null &&
+            archive.matches(
+              size: entry.size!,
+              eTag: entry.eTag,
+              modifiedAt: entry.modifiedAt,
+            )) {
+          return;
+        }
+        _context.state.snapshotCache.remove(memoryKey);
+        WebDavLibrarySource._cache.invalidateSnapshot(config.cacheKey, id);
+      });
 
   Future<void> writeMetadata(String comicId, ComicMetaData metadata) =>
       _run(() => WebDavLibrarySource.writeMetadata(comicId, metadata));

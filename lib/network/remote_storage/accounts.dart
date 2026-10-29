@@ -345,11 +345,22 @@ class RemoteStorageAccounts with ChangeNotifier {
         .where((item) => item.id != id)
         .map((item) => item.toJson())
         .toList();
-    for (final key in const ['syncRemoteLocation', 'backupRemoteLocation']) {
+    for (final key in const [
+      'syncRemoteLocation',
+      'backupRemoteLocation',
+      'homeRemoteLocation',
+    ]) {
       final value = appdata.settings[key];
       if (value is Map && value['accountId'] == id) {
         appdata.settings[key] = null;
       }
+    }
+    final homeSources = appdata.settings['homeRemoteSources'];
+    if (homeSources is List) {
+      appdata.settings['homeRemoteSources'] = [
+        for (final source in homeSources)
+          if (source is Map && source['accountId'] != id) source,
+      ];
     }
     await appdata.saveData();
     notifyListeners();
@@ -611,7 +622,11 @@ class RemoteStorageAccounts with ChangeNotifier {
   }
 
   void _remapAccountReferences(Map<String, String> aliases) {
-    for (final key in const ['syncRemoteLocation', 'backupRemoteLocation']) {
+    for (final key in const [
+      'syncRemoteLocation',
+      'backupRemoteLocation',
+      'homeRemoteLocation',
+    ]) {
       final location = appdata.settings[key];
       if (location is Map && aliases.containsKey(location['accountId'])) {
         appdata.settings[key] = {
@@ -620,15 +635,17 @@ class RemoteStorageAccounts with ChangeNotifier {
         };
       }
     }
-    final libraries = appdata.settings[remoteLibrariesSetting];
-    if (libraries is List) {
-      appdata.settings[remoteLibrariesSetting] = [
-        for (final library in libraries)
-          if (library is Map && aliases.containsKey(library['accountId']))
-            {...library, 'accountId': aliases[library['accountId']]}
-          else
-            library,
-      ];
+    for (final key in const [remoteLibrariesSetting, 'homeRemoteSources']) {
+      final libraries = appdata.settings[key];
+      if (libraries is List) {
+        appdata.settings[key] = [
+          for (final library in libraries)
+            if (library is Map && aliases.containsKey(library['accountId']))
+              {...library, 'accountId': aliases[library['accountId']]}
+            else
+              library,
+        ];
+      }
     }
   }
 

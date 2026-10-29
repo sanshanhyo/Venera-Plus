@@ -227,6 +227,121 @@ void main() {
     },
   );
 
+  test(
+    'metadata matching recognizes packaged comic filenames conservatively',
+    () async {
+      connectSettings();
+      const title = '回复宿舍重启人生';
+      const filename = '[MAX]回复宿舍重启人生[15卷完整版][China中文][1-10].zip';
+      const matched = BangumiSubject(
+        id: 42,
+        title: title,
+        originalTitle: '',
+        coverUrl: '',
+        totalEpisodes: 0,
+        totalVolumes: 0,
+      );
+      gateway.searchResults = [matched];
+      gateway.subjects[42] = matched;
+
+      final result = await service.matchSubjectForMetadata(filename);
+
+      expect(result?.id, 42);
+      expect(gateway.searchKeywords, ['[MAX]$title', title]);
+      expect(gateway.subjectCalls, [42]);
+      expect(saveCount, 0);
+      expect(appdata.settings['bangumiBindings'], isEmpty);
+    },
+  );
+
+  test(
+    'metadata filename cleanup handles explicit wrapping tags in either order',
+    () async {
+      connectSettings();
+      gateway.searchResults = [subject()];
+      gateway.subjects[42] = subject();
+
+      for (final filename in [
+        'Title[15卷完整版][China中文][1-10].zip',
+        'Title 语言：[Chinese][1-10].CBZ',
+        'Title[完整版] 版本：【高清】.PDF',
+        'Title【简体中文】【第1至10卷】.epub',
+      ]) {
+        expect((await service.matchSubjectForMetadata(filename))?.id, 42);
+      }
+
+      expect(gateway.searchKeywords, List.filled(4, 'Title'));
+    },
+  );
+
+  test(
+    'metadata cleanup retains unknown brackets and non-comic extensions',
+    () async {
+      connectSettings();
+      for (final filename in [
+        'Title[Special][15卷完整版].pdf',
+        '[Special]Title[Chinese].zip',
+        'Title[15].cbz',
+        'Title 1-10.zip',
+        'Title[Chinese].story',
+      ]) {
+        expect(await service.matchSubjectForMetadata(filename), isNull);
+      }
+
+      expect(gateway.searchKeywords, [
+        'Title[Special]',
+        '[Special]Title',
+        'Title[15]',
+        'Title 1-10',
+        'Title[Chinese].story',
+      ]);
+      expect(gateway.subjectCalls, isEmpty);
+    },
+  );
+
+  test(
+    'release group alternative rejects competing exact title matches',
+    () async {
+      connectSettings();
+      gateway.searchResults = [
+        subject(),
+        const BangumiSubject(
+          id: 43,
+          title: '[MAX]Title',
+          originalTitle: '',
+          coverUrl: '',
+          totalEpisodes: 0,
+          totalVolumes: 0,
+        ),
+      ];
+
+      expect(await service.matchSubjectForMetadata('[MAX]Title.zip'), isNull);
+      expect(gateway.searchKeywords, ['[MAX]Title', 'Title']);
+      expect(gateway.subjectCalls, isEmpty);
+    },
+  );
+
+  test(
+    'the same subject matching both filename candidates is not ambiguous',
+    () async {
+      connectSettings();
+      const matched = BangumiSubject(
+        id: 42,
+        title: 'Title',
+        originalTitle: '[MAX]Title',
+        coverUrl: '',
+        totalEpisodes: 0,
+        totalVolumes: 0,
+      );
+      gateway.searchResults = [matched, matched];
+      gateway.subjects[42] = matched;
+
+      expect((await service.matchSubjectForMetadata('[MAX]Title.cbz'))?.id, 42);
+      expect(gateway.searchKeywords, ['[MAX]Title', 'Title']);
+      expect(gateway.subjectCalls, [42]);
+    },
+  );
+
   test('an unlabeled author word remains part of the title', () async {
     connectSettings();
     gateway.searchResults = [

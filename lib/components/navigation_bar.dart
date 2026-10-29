@@ -8,6 +8,7 @@ import 'package:venera_plus/foundation/consts.dart';
 import 'package:venera_plus/foundation/context.dart';
 import 'package:venera_plus/foundation/widget_utils.dart';
 import 'package:venera_plus/foundation/edge_back_gesture.dart';
+import 'package:venera_plus/foundation/volume_navigation.dart';
 
 import 'consts.dart';
 import 'gesture.dart';
@@ -64,6 +65,7 @@ typedef NaviItemTapListener = void Function(int);
 
 class NaviPaneState extends State<NaviPane>
     with SingleTickerProviderStateMixin {
+  final _volumeNavigationObserver = VolumeNavigationObserver();
   bool _canPop = true;
 
   late int _currentPage = widget.initialPage;
@@ -239,7 +241,7 @@ class NaviPaneState extends State<NaviPane>
             return false;
           },
           child: Navigator(
-            observers: [widget.observer],
+            observers: [widget.observer, _volumeNavigationObserver],
             key: widget.navigatorKey,
             onGenerateRoute: (settings) => AppPageRoute(
               preventRebuild: false,

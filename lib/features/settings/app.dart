@@ -10,6 +10,7 @@ import 'package:venera_plus/components/message.dart';
 import 'package:venera_plus/components/pop_up_widget.dart';
 import 'package:venera_plus/components/scroll.dart';
 import 'package:venera_plus/features/bangumi/bangumi.dart';
+import 'package:venera_plus/features/cloud_home/cloud_home_settings_view.dart';
 import 'package:venera_plus/features/history/history.dart';
 import 'package:venera_plus/features/local_comics/local_comics.dart';
 import 'package:venera_plus/features/settings/data_sync_schedule_fields.dart';
@@ -181,6 +182,13 @@ class _StorageAndSyncSettingsState extends State<StorageAndSyncSettings> {
               icon: Icons.folder_open_outlined,
             ),
             _group([
+              ListTile(
+                key: const Key('cloud-home-entry'),
+                title: Text('Cloud Home Folder'.tl),
+                subtitle: Text(_locationSummary('homeRemoteLocation')),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => showCloudHomeSettings(context),
+              ),
               ListTile(
                 key: const Key('comic-libraries-entry'),
                 title: Text('Online Comic Libraries'.tl),

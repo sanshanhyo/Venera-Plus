@@ -14,6 +14,7 @@ import 'package:venera_plus/foundation/cache_manager.dart';
 import 'package:venera_plus/foundation/comic_type.dart';
 import 'package:venera_plus/features/comic_details/comic_details.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
+import 'package:venera_plus/features/cloud_home/cloud_home_source.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
 import 'package:venera_plus/features/comic_widgets/comic_widgets.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
@@ -55,7 +56,10 @@ final _remoteComicLibrarySources = <String, WebDavLibraryEngine>{};
 String _remoteLibraryConfigurationSignature = '';
 
 String _remoteLibrarySignature() => jsonEncode([
-  for (final library in RemoteComicLibraryRegistry.read())
+  for (final library in [
+    ...RemoteComicLibraryRegistry.read(),
+    ...readCloudHomeSources(),
+  ])
     [
       library.id,
       library.sourceKey,
@@ -81,7 +85,9 @@ String _remoteLibrarySignature() => jsonEncode([
 ]);
 
 List<ComicSource> _runtimeRemoteComicSources() {
-  final libraries = RemoteComicLibraryRegistry.read();
+  final homeSources = readCloudHomeSources();
+  final homeKeys = homeSources.map((library) => library.sourceKey).toSet();
+  final libraries = [...RemoteComicLibraryRegistry.read(), ...homeSources];
   final active = <String>{};
   final result = <ComicSource>[];
   for (final library in libraries) {
@@ -90,7 +96,9 @@ List<ComicSource> _runtimeRemoteComicSources() {
     // to reload. The library becomes visible again when its account returns.
     if (account == null || !account.isConfigured) continue;
     active.add(library.sourceKey);
-    final current = _remoteComicLibrarySources[library.sourceKey];
+    final current =
+        WebDavLibraryEngines.find(library.sourceKey) ??
+        _remoteComicLibrarySources[library.sourceKey];
     final source = current != null && current.matches(library, account)
         ? current
         : WebDavLibraryEngine(
@@ -100,7 +108,9 @@ List<ComicSource> _runtimeRemoteComicSources() {
     if (!identical(source, current)) current?.cancel();
     _remoteComicLibrarySources[library.sourceKey] = source;
     WebDavLibraryEngines.replace(source);
-    result.add(source.create());
+    result.add(
+      source.create(directoryBrowser: homeKeys.contains(library.sourceKey)),
+    );
   }
   for (final key in _remoteComicLibrarySources.keys.toList()) {
     if (!active.contains(key)) {
@@ -239,7 +249,9 @@ Future<void> init({bool deferBackgroundTasks = false}) async {
   configureComicTypeSourceKeyResolver();
   configureBangumiScopeResolver(
     (sourceKey) =>
-        RemoteComicLibraryRegistry.findBySourceKey(sourceKey)?.id ?? '',
+        RemoteComicLibraryRegistry.findBySourceKey(sourceKey)?.id ??
+        findCloudHomeSource(sourceKey)?.id ??
+        '',
   );
   WebDavLibrarySource.configureMetadataWriteGuard((
     libraryId,
@@ -276,7 +288,9 @@ Future<void> init({bool deferBackgroundTasks = false}) async {
         latestBinding?.subjectId != subject.id) {
       return;
     }
-    final source = _remoteComicLibrarySources[sourceKey];
+    final source =
+        WebDavLibraryEngines.find(sourceKey) ??
+        _remoteComicLibrarySources[sourceKey];
     if (source == null || source.libraryId != scopeId) return;
     await source.writeMetadata(comicId, _metadataFromBangumiSubject(detailed));
   });
