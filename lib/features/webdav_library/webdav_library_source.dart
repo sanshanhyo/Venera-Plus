@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:venera_plus/features/metadata/metadata_store.dart';
 import 'dart:convert';
 import 'dart:io' show HttpDate;
 
@@ -1193,16 +1194,18 @@ class WebDavLibrarySource {
       final comics = _cache
           .page(config.cacheKey, page: page, pageSize: pageSize, roots: roots)
           .map(
-            (comic) => Comic(
-              comic.title,
-              comic.cover,
-              comic.id,
-              null,
-              comic.tags,
-              '',
-              _activeSourceKey,
-              null,
-              null,
+            (comic) => MetadataStore.applyAppComic(
+              Comic(
+                comic.title,
+                comic.cover,
+                comic.id,
+                null,
+                comic.tags,
+                '',
+                _activeSourceKey,
+                null,
+                null,
+              ),
             ),
           )
           .toList();
@@ -1576,39 +1579,41 @@ class WebDavLibrarySource {
           ? null
           : _archiveChapterDisplay(snapshot.archive!);
       return Res(
-        ComicDetails.fromJson({
-          'title': snapshot.title,
-          'subtitle': null,
-          'cover': snapshot.cover,
-          'description': snapshot.description,
-          'tags': snapshot.detailTags,
-          'chapters':
-              archiveDisplay?.titles ??
-              (snapshot.chapters.length == 1 &&
-                      snapshot.chapters.containsKey(rootChapterId)
-                  ? null
-                  : snapshot.chapters),
-          'chapterGroups': archiveDisplay?.groups,
-          'chapterPageCounts': snapshot.archive?.chapterPageCounts,
-          'sourceKey': _activeSourceKey,
-          'comicId': id,
-          'externalIds': {
-            if (snapshot.bangumiSubjectId != null)
-              'bangumi': snapshot.bangumiSubjectId.toString(),
-          },
-          'thumbnails': null,
-          'recommend': null,
-          'isFavorite': false,
-          'subId': null,
-          'likesCount': null,
-          'isLiked': null,
-          'commentCount': null,
-          'uploader': null,
-          'uploadTime': null,
-          'updateTime': null,
-          'url': null,
-          'maxPage': snapshot.pageCount,
-        }),
+        MetadataStore.applyAppDetails(
+          ComicDetails.fromJson({
+            'title': snapshot.title,
+            'subtitle': null,
+            'cover': snapshot.cover,
+            'description': snapshot.description,
+            'tags': snapshot.detailTags,
+            'chapters':
+                archiveDisplay?.titles ??
+                (snapshot.chapters.length == 1 &&
+                        snapshot.chapters.containsKey(rootChapterId)
+                    ? null
+                    : snapshot.chapters),
+            'chapterGroups': archiveDisplay?.groups,
+            'chapterPageCounts': snapshot.archive?.chapterPageCounts,
+            'sourceKey': _activeSourceKey,
+            'comicId': id,
+            'externalIds': {
+              if (snapshot.bangumiSubjectId != null)
+                'bangumi': snapshot.bangumiSubjectId.toString(),
+            },
+            'thumbnails': null,
+            'recommend': null,
+            'isFavorite': false,
+            'subId': null,
+            'likesCount': null,
+            'isLiked': null,
+            'commentCount': null,
+            'uploader': null,
+            'uploadTime': null,
+            'updateTime': null,
+            'url': null,
+            'maxPage': snapshot.pageCount,
+          }),
+        ),
       );
     } catch (e) {
       return Res.error(e.toString());
@@ -3357,7 +3362,16 @@ class WebDavLibraryEngine {
     return WebDavLibraryEngine._(library, context, store);
   }
 
-  WebDavLibraryEngine._(this.library, this._context, this._store);
+  WebDavLibraryEngine._(this.library, this._context, this._store) {
+    _metadataStore = MetadataStore.appOrNull;
+    _metadataStore?.addListener(_metadataChanged);
+  }
+
+  MetadataStore? _metadataStore;
+
+  void _metadataChanged() {
+    if (!_cancelled) contentVersion.value++;
+  }
 
   final RemoteLibrary library;
   final _WebDavLibraryContext _context;
@@ -3421,6 +3435,7 @@ class WebDavLibraryEngine {
   void cancel() {
     if (_cancelled) return;
     _cancelled = true;
+    _metadataStore?.removeListener(_metadataChanged);
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = null;
     _run(() {

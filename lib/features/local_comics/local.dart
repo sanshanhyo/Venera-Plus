@@ -7,6 +7,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
+import 'package:venera_plus/features/metadata/metadata_models.dart';
+import 'package:venera_plus/features/metadata/metadata_store.dart';
 import 'package:venera_plus/foundation/comic_type.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/foundation/log.dart';
@@ -28,14 +30,41 @@ class LocalComic with HistoryMixin implements Comic {
   @override
   final String id;
 
-  @override
-  final String title;
+  final String _title;
+
+  MetadataBinding? get _metadata {
+    try {
+      return MetadataStore.lookupApp(sourceKey, id);
+    } catch (_) {
+      // Downloaded comics remain usable after their online source is removed.
+      return null;
+    }
+  }
 
   @override
-  final String subtitle;
+  String get title => _metadata?.result.title ?? _title;
 
   @override
-  final List<String> tags;
+  String get subtitle {
+    final authors = _metadata?.result.authors;
+    return authors?.isNotEmpty == true ? authors!.join(', ') : _subtitle;
+  }
+
+  final String _subtitle;
+
+  @override
+  List<String> get tags {
+    final result = _metadata?.result;
+    if (result == null) return _tags;
+    return {
+      ..._tags,
+      for (final entry in result.tags.entries)
+        ...entry.value.map((tag) => '${entry.key}:$tag'),
+      ...result.authors.map((author) => 'author:$author'),
+    }.toList();
+  }
+
+  final List<String> _tags;
 
   /// The name of the directory where the comic is stored
   final String directory;
@@ -49,7 +78,19 @@ class LocalComic with HistoryMixin implements Comic {
 
   /// relative path to the cover image
   @override
-  final String cover;
+  String get cover {
+    final metadata = _metadata;
+    if (metadata == null) return _cover;
+    return MetadataStore.appOrNull?.coverKey(metadata) ?? _cover;
+  }
+
+  final String _cover;
+
+  // Physical storage/export operations must retain original file references.
+  String get storedTitle => _title;
+  String get storedSubtitle => _subtitle;
+  List<String> get storedTags => _tags;
+  String get storedCover => _cover;
 
   final ComicType comicType;
 
@@ -59,37 +100,40 @@ class LocalComic with HistoryMixin implements Comic {
 
   const LocalComic({
     required this.id,
-    required this.title,
-    required this.subtitle,
-    required this.tags,
+    required String title,
+    required String subtitle,
+    required List<String> tags,
     required this.directory,
     required this.chapters,
-    required this.cover,
+    required String cover,
     required this.comicType,
     required this.downloadedChapters,
     required this.createdAt,
-  });
+  }) : _title = title,
+       _subtitle = subtitle,
+       _tags = tags,
+       _cover = cover;
 
   LocalComic.fromRow(Row row)
     : id = row[0] as String,
-      title = row[1] as String,
-      subtitle = row[2] as String,
-      tags = List.from(jsonDecode(row[3] as String)),
+      _title = row[1] as String,
+      _subtitle = row[2] as String,
+      _tags = List.from(jsonDecode(row[3] as String)),
       directory = row[4] as String,
       chapters = ComicChapters.fromJsonOrNull(jsonDecode(row[5] as String)),
-      cover = row[6] as String,
+      _cover = row[6] as String,
       comicType = ComicType(row[7] as int),
       downloadedChapters = List.from(jsonDecode(row[8] as String)),
       createdAt = DateTime.fromMillisecondsSinceEpoch(row[9] as int);
 
-  File get coverFile => File(FilePath.join(baseDir, cover));
+  File get coverFile => File(FilePath.join(baseDir, _cover));
 
   String get baseDir => (directory.contains('/') || directory.contains('\\'))
       ? directory
       : FilePath.join(LocalManager().path, directory);
 
   @override
-  String get description => "";
+  String get description => _metadata?.result.description ?? '';
 
   @override
   String get sourceKey =>
@@ -203,6 +247,7 @@ class LocalManager with ChangeNotifier {
   }
 
   late Database _db;
+  MetadataStore? _metadataStore;
 
   /// path to the directory where all the comics are stored
   late String path;
@@ -335,6 +380,8 @@ class LocalManager with ChangeNotifier {
     if (!debugSkipComicSourceInit) {
       await ComicSourceManager().ensureInit();
     }
+    _metadataStore = MetadataStore.appOrNull;
+    _metadataStore?.addListener(notifyListeners);
     restoreDownloadingTasks();
   }
 
@@ -370,12 +417,12 @@ class LocalManager with ChangeNotifier {
       'INSERT OR REPLACE INTO comics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
       [
         id ?? comic.id,
-        comic.title,
-        comic.subtitle,
-        jsonEncode(comic.tags),
+        comic._title,
+        comic._subtitle,
+        jsonEncode(comic._tags),
         comic.directory,
         jsonEncode(comic.chapters),
-        comic.cover,
+        comic._cover,
         comic.comicType.value,
         jsonEncode(downloaded),
         comic.createdAt.millisecondsSinceEpoch,
@@ -385,6 +432,9 @@ class LocalManager with ChangeNotifier {
   }
 
   void remove(String id, ComicType comicType, {bool notify = true}) {
+    if (comicType == ComicType.local) {
+      MetadataStore.appOrNull?.remove('local', id);
+    }
     _db.execute(
       'DELETE FROM natural_sort_migration WHERE id = ? AND comic_type = ?',
       [id, comicType.value],
@@ -410,7 +460,12 @@ class LocalManager with ChangeNotifier {
         ${sortType.value == 'time_asc' ? 'ASC' : 'DESC'}
       ;
     ''');
-    return res.map((row) => LocalComic.fromRow(row)).toList();
+    final comics = res.map((row) => LocalComic.fromRow(row)).toList();
+    if (sortType == LocalSortType.name &&
+        MetadataStore.appOrNull?.hasBindings == true) {
+      comics.sort((a, b) => b.title.compareTo(a.title));
+    }
+    return comics;
   }
 
   LocalComic? find(String id, ComicType comicType) {
@@ -426,6 +481,7 @@ class LocalManager with ChangeNotifier {
 
   @override
   void dispose() {
+    _metadataStore?.removeListener(notifyListeners);
     super.dispose();
     _db.dispose();
   }
@@ -461,6 +517,19 @@ class LocalManager with ChangeNotifier {
   }
 
   List<LocalComic> search(String keyword) {
+    if (MetadataStore.appOrNull?.hasBindings == true) {
+      final needle = keyword.toLowerCase();
+      return _db
+          .select('SELECT * FROM comics ORDER BY created_at DESC')
+          .map((row) => LocalComic.fromRow(row))
+          .where(
+            (comic) =>
+                comic.title.toLowerCase().contains(needle) ||
+                comic.subtitle.toLowerCase().contains(needle) ||
+                comic.tags.any((tag) => tag.toLowerCase().contains(needle)),
+          )
+          .toList();
+    }
     final res = _db.select(
       '''
       SELECT * FROM comics
@@ -572,12 +641,12 @@ class LocalManager with ChangeNotifier {
         add(
           LocalComic(
             id: comic.id,
-            title: comic.title,
-            subtitle: comic.subtitle,
-            tags: comic.tags,
+            title: comic.storedTitle,
+            subtitle: comic.storedSubtitle,
+            tags: comic.storedTags,
             directory: comic.directory,
             chapters: chapters,
-            cover: comic.cover,
+            cover: comic.storedCover,
             comicType: comic.comicType,
             downloadedChapters: comic.downloadedChapters,
             createdAt: comic.createdAt,
@@ -714,10 +783,7 @@ class LocalManager with ChangeNotifier {
         [jsonEncode(newDownloadedChapters), c.id, c.comicType.value],
       );
     } else {
-      _db.execute('DELETE FROM comics WHERE id = ? AND comic_type = ?;', [
-        c.id,
-        c.comicType.value,
-      ]);
+      remove(c.id, c.comicType, notify: false);
     }
     var shouldRemovedDirs = <Directory>[];
     for (var chapter in chapters) {
@@ -764,6 +830,12 @@ class LocalManager with ChangeNotifier {
       return;
     }
     _db.execute('COMMIT;');
+
+    for (final comic in comics) {
+      if (comic.comicType == ComicType.local) {
+        MetadataStore.appOrNull?.remove('local', comic.id);
+      }
+    }
 
     var comicIDs = comics.map((e) => ComicID(e.comicType, e.id)).toList();
 

@@ -15,6 +15,7 @@ import 'package:venera_plus/features/comic_widgets/comic_widgets.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/features/history/history.dart';
 import 'package:venera_plus/features/local_comics/local_comics.dart';
+import 'package:venera_plus/features/metadata/metadata_panel.dart';
 import 'package:venera_plus/features/reader/reader.dart';
 import 'package:venera_plus/features/search/search_shortcuts.dart';
 import 'package:venera_plus/foundation/app.dart';
@@ -27,6 +28,8 @@ import 'package:venera_plus/routing/page_jump_target.dart';
 
 abstract mixin class ComicPageActions {
   void update();
+
+  void onMetadataChanged();
 
   ComicDetails get comic;
 
@@ -106,6 +109,16 @@ abstract mixin class ComicPageActions {
         chapters: comic.chapters,
         history: history,
       ),
+    );
+  }
+
+  Future<void> openMetadataInformation() async {
+    await showMetadataPanel(
+      App.rootContext,
+      sourceKey: comic.sourceKey,
+      comicId: comic.id,
+      comicTitle: comic.title,
+      onChanged: onMetadataChanged,
     );
   }
 
@@ -377,6 +390,12 @@ abstract mixin class ComicPageActions {
   void showMoreActions() {
     var context = App.rootContext;
     showMenuX(context, Offset(context.width - 16, context.padding.top), [
+      if (supportsMetadataCompletion(comic.sourceKey))
+        MenuEntry(
+          icon: Icons.auto_fix_high_outlined,
+          text: 'Complete information'.tl,
+          onClick: openMetadataInformation,
+        ),
       MenuEntry(
         icon: Icons.copy,
         text: "Copy Title".tl,

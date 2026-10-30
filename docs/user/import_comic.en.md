@@ -176,6 +176,16 @@ When the user manually binds a Bangumi subject from comic details, that explicit
 
 Bangumi bindings are isolated by a normalized library identity made from the server URL, username, and remote root path. The password is deliberately excluded, so changing only a password retains bindings, while another server, account, or root cannot reuse bindings for matching relative paths. Selecting **Finished reading** refreshes both the remote collection and subject totals, then submits episode and volume progress together. Higher remote progress and higher values explicitly entered by the user are never reduced.
 
+### Complete EH/JM Information After Import
+
+For a local comic, use the item or single-selection menu under `Library` → `Local Comics`. For a WebDAV comic, open the comic details page and choose **Complete information** from its More menu. Enter a complete E-Hentai gallery link or a JM ID/album link, review the fetched details, then confirm to save them.
+
+Supplemental information is saved on this device and applied to that comic. It is not written to a WebDAV `metadata.json` file. An E-Hentai reference uses the gallery ID and token from its link. On first use, JM website and cover addresses can be adjusted under **JM connection settings**. Automatic matching from local filenames is not available yet.
+
+Cover caching has its own setting. When disabled, the cover is shown without keeping a local copy; when enabled, a copy is saved locally. If cover caching fails, the retrieved text information is still saved and a notice is shown. Removing the supplemental information restores the comic's original title, author, tags, and cover.
+
+Sources: [E-Hentai API](https://ehwiki.org/wiki/API), [JMComic-Crawler-Python](https://github.com/hect0x7/JMComic-Crawler-Python).
+
 ### Metadata-Marked Nested Layout
 
 For a deeply nested WebDAV library, place `metadata.json` in the comic root to explicitly mark that directory as one comic:

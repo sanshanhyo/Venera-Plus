@@ -19,14 +19,16 @@ class CloudHomeItem {
     required this.kind,
     this.fileCount,
     this.cover,
+    this.displayName,
   });
 
   final RemoteEntry entry;
   final CloudHomeItemKind kind;
   final int? fileCount;
   final String? cover;
+  final String? displayName;
 
-  String get name => entry.name;
+  String get name => displayName ?? entry.name;
   String get path => entry.path;
   bool get isDirectory => entry.isDirectory;
   bool get isReadable =>
@@ -37,11 +39,13 @@ class CloudHomeItem {
     CloudHomeItemKind? kind,
     int? fileCount,
     String? cover,
+    String? displayName,
   }) => CloudHomeItem(
     entry: entry,
     kind: kind ?? this.kind,
     fileCount: fileCount ?? this.fileCount,
     cover: cover ?? this.cover,
+    displayName: displayName ?? this.displayName,
   );
 }
 

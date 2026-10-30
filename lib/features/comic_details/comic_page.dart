@@ -26,6 +26,8 @@ import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/features/history/history.dart';
 import 'package:venera_plus/foundation/image_provider/cached_image.dart';
 import 'package:venera_plus/features/local_comics/local_comics.dart';
+import 'package:venera_plus/features/metadata/metadata_service.dart';
+import 'package:venera_plus/features/metadata/metadata_store.dart';
 import 'package:venera_plus/foundation/res.dart';
 import 'package:venera_plus/features/reader/reader.dart';
 import 'package:venera_plus/foundation/file_type.dart';
@@ -106,6 +108,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
 
   @override
   void onReadEnd() => _onHistoryChanged();
+
+  @override
+  void onMetadataChanged() {
+    if (!mounted || data == null) return;
+    data = MetadataService().applyDetails(data!);
+    update();
+  }
 
   ComicType get _historyType => ComicType.fromKey(widget.sourceKey);
 
@@ -945,7 +954,9 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   }
 
   String? get _cover {
-    final cover = widget.cover?.trim().isNotEmpty == true
+    final cover = comic.cover.startsWith('$metadataCoverScheme://')
+        ? comic.cover
+        : widget.cover?.trim().isNotEmpty == true
         ? widget.cover
         : comic.cover;
     if (cover == null || cover.trim().isEmpty) {

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
+import 'package:venera_plus/features/metadata/metadata_store.dart';
 import 'package:venera_plus/features/webdav_library/webdav_library.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/network/images.dart';
@@ -32,7 +33,12 @@ class CloudHomeController extends ChangeNotifier {
        _cache = cache ?? CloudHomeDirectoryCache(),
        _storeFactory = storeFactory,
        _ensureSource = ensureSource,
-       _preloadComic = preloadComic;
+       _preloadComic = preloadComic {
+    _metadataStore = MetadataStore.appOrNull;
+    _metadataStore?.addListener(_metadataChanged);
+  }
+
+  MetadataStore? _metadataStore;
 
   final RemoteStorageAccounts _accounts;
   final CloudHomeDirectoryCache _cache;
@@ -48,6 +54,7 @@ class CloudHomeController extends ChangeNotifier {
   final _kinds = <String, CloudHomeItemKind>{};
   final _counts = <String, int>{};
   final _covers = <String, String>{};
+  final _originalCovers = <String, String>{};
   final _detailsReady = <String>{};
 
   RemoteLocation? _location;
@@ -176,6 +183,7 @@ class CloudHomeController extends ChangeNotifier {
     _kinds.clear();
     _counts.clear();
     _covers.clear();
+    _originalCovers.clear();
     _detailsReady.clear();
     _error = null;
     _refreshedAt = null;
@@ -291,14 +299,28 @@ class CloudHomeController extends ChangeNotifier {
 
   List<CloudHomeItem> _decorate(Iterable<RemoteEntry> entries) =>
       List.unmodifiable(
-        cloudHomeItems(entries).map(
-          (item) => item.copyWith(
+        cloudHomeItems(entries).map((item) {
+          final binding = _metadataStore?.find(_sourceKey, item.path);
+          final cachedCover = _covers[item.path];
+          return item.copyWith(
             kind: item.isDirectory ? _kind(item.path) : item.kind,
             fileCount: _counts[normalizeRemoteDirectory(item.path)],
-            cover: _covers[item.path],
-          ),
-        ),
+            displayName: binding?.result.title,
+            cover: binding == null
+                ? (cachedCover?.startsWith('$metadataCoverScheme:') == true
+                      ? _originalCovers[item.path]
+                      : cachedCover)
+                : _metadataStore?.coverKey(binding) ?? cachedCover,
+          );
+        }),
       );
+
+  void _metadataChanged() {
+    if (_disposed) return;
+    _detailsReady.clear();
+    _preloadSignature = null;
+    _rebuildItems();
+  }
 
   void _rebuildItems() {
     final snapshot = _memory[_directory];
@@ -309,6 +331,7 @@ class CloudHomeController extends ChangeNotifier {
         Iterable<int>.generate(updated.length).any(
           (index) =>
               updated[index].kind != _items[index].kind ||
+              updated[index].name != _items[index].name ||
               updated[index].cover != _items[index].cover ||
               updated[index].fileCount != _items[index].fileCount,
         );
@@ -493,6 +516,11 @@ class CloudHomeController extends ChangeNotifier {
             final source = ComicSource.find(key);
             final result = await source?.loadComicInfo?.call(file.path);
             if (result == null || result.error) return null;
+            if (current()) {
+              _originalCovers[item.path] = MetadataStore.originalDetails(
+                result.data,
+              ).cover;
+            }
             final cover = result.data.cover;
             if (cover.isNotEmpty && current()) {
               try {
@@ -639,6 +667,7 @@ class CloudHomeController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _metadataStore?.removeListener(_metadataChanged);
     _bindingGeneration++;
     _navigationGeneration++;
     _preloadGeneration++;

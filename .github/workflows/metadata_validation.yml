@@ -1,0 +1,237 @@
+name: EH/JM 元数据验证
+run-name: EH/JM 元数据验证 ${{ github.ref_name }}
+
+on:
+  workflow_call:
+    inputs:
+      capture_screenshots:
+        type: boolean
+        default: true
+      eh_gallery_url:
+        type: string
+        default: ''
+      jm_reference:
+        type: string
+        default: ''
+      jm_base_url:
+        type: string
+        default: 'https://18comic.vip'
+      jm_cover_base_url:
+        type: string
+        default: 'https://cdn-msp.jmapiproxy1.cc'
+  workflow_dispatch:
+    inputs:
+      capture_screenshots:
+        description: '运行 Android 模拟器截图验证'
+        type: boolean
+        default: true
+      eh_gallery_url:
+        description: '可选：用户指定的 EH 画廊链接；留空只检查 API 连通性'
+        type: string
+        default: ''
+      jm_reference:
+        description: '可选：用户指定的 JM ID 或链接；留空只检查站点连通性'
+        type: string
+        default: ''
+      jm_base_url:
+        description: 'JM 网站地址'
+        type: string
+        default: 'https://18comic.vip'
+      jm_cover_base_url:
+        description: 'JM 封面地址'
+        type: string
+        default: 'https://cdn-msp.jmapiproxy1.cc'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metadata-validation-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android_screenshots:
+    name: Android 元数据截图
+    if: ${{ inputs.capture_screenshots }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VENERA_ANDROID_PREVIEW: 'true'
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: '0'
+      SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - name: 准备 Android 模拟器空间与 KVM
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm-udev.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          architecture: x64
+          cache: true
+      - name: 配置 sccache
+        id: sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/setup-java@v6
+        with:
+          distribution: oracle
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle*
+            android/gradle/wrapper/gradle-wrapper.properties
+            pubspec.lock
+      - name: 准备 Rust 工具链
+        run: |
+          python3 .github/scripts/prepare_rust_toolchain.py \
+            --target aarch64-linux-android \
+            --target i686-linux-android \
+            --target x86_64-linux-android
+          rustup target add --toolchain stable \
+            aarch64-linux-android \
+            i686-linux-android \
+            x86_64-linux-android
+      - name: 准备临时 Android Debug 签名
+        run: |
+          keytool -genkeypair -noprompt \
+            -keystore android/debug.keystore \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -dname 'CN=Android Debug,O=Android,C=US' \
+            -keyalg RSA -keysize 2048 -validity 10000
+          printf '%s\n' \
+            'storePassword=android' \
+            'keyPassword=android' \
+            'keyAlias=androiddebugkey' \
+            'storeFile=../debug.keystore' \
+            > android/key.properties
+      - run: flutter pub get --enforce-lockfile
+      - name: 下载 OpenList Android 内核
+        run: python3 .github/scripts/fetch_openlist_core.py android
+      - name: 运行 Android 真实界面与元数据保存截图
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: |
+            mkdir -p build/metadata-smoke-artifacts
+            set +e
+            flutter drive --driver=test/driver/metadata_smoke_driver.dart --target=test/integration/metadata_smoke.dart -d emulator-5554 --dart-define=CI_NATIVE_SMOKE=true
+            smoke_result=$?
+            adb -s emulator-5554 exec-out screencap -p > build/metadata-smoke-artifacts/device-final.png
+            adb -s emulator-5554 logcat -d -t 1200 > build/metadata-smoke-artifacts/android-logcat.txt
+            if [ "$smoke_result" -ne 0 ]; then
+              exit "$smoke_result"
+            fi
+            test -s build/metadata-smoke-artifacts/manifest.json
+      - name: 校验依赖锁文件未变更
+        run: git diff --exit-code -- pubspec.lock
+      - name: sccache 统计
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
+        run: sccache --show-stats
+      - name: 上传元数据截图与场景结果
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: metadata-android-screenshots
+          path: build/metadata-smoke-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  connectivity:
+    name: EH/JM 实际网络连通检查
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 隐去用户提供的读取目标
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.parse import urlparse
+
+          with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as stream:
+              inputs = json.load(stream).get('inputs', {})
+          if inputs.get('metadata_options'):
+              inputs = json.loads(inputs['metadata_options'])
+
+          def mask(value):
+              if value:
+                  escaped = value.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                  print(f'::add-mask::{escaped}')
+
+          for key in ('eh_gallery_url', 'jm_reference'):
+              value = inputs.get(key, '')
+              mask(value)
+              if key == 'eh_gallery_url':
+                  parts = urlparse(value).path.strip('/').split('/')
+                  if len(parts) == 3 and parts[0] == 'g':
+                      mask(parts[2])
+          PY
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          architecture: x64
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - name: 检查实际网络与可选用户目标
+        env:
+          CI_METADATA_CONNECTIVITY: 'true'
+          EH_GALLERY_URL: ${{ inputs.eh_gallery_url || '' }}
+          JM_REFERENCE: ${{ inputs.jm_reference || '' }}
+          JM_BASE_URL: ${{ inputs.jm_base_url || 'https://18comic.vip' }}
+          JM_COVER_BASE_URL: ${{ inputs.jm_cover_base_url || 'https://cdn-msp.jmapiproxy1.cc' }}
+          METADATA_CONNECTIVITY_REPORT: build/metadata-connectivity/report.json
+        run: flutter test --no-pub --reporter expanded --dart-define=CI_METADATA_CONNECTIVITY=true test/integration/metadata_connectivity.dart
+      - name: 汇总脱敏连通结果
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = Path('build/metadata-connectivity/report.json')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('### EH/JM 网络检查\n\n')
+              summary.write('真实网络检查与合成数据界面截图分别执行。未提供目标时，漫画信息读取会明确跳过。\n\n')
+              if report.is_file():
+                  content = json.dumps(json.loads(report.read_text(encoding='utf-8')), ensure_ascii=False, indent=2)
+                  summary.write('```json\n' + content + '\n```\n')
+              else:
+                  summary.write('检查未生成报告，请查看失败步骤。\n')
+          PY
+      - name: 上传脱敏连通报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: metadata-connectivity-report
+          path: build/metadata-connectivity
+          if-no-files-found: error
+          retention-days: 14

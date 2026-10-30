@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:venera_plus/features/cloud_home/cloud_home_cache.dart';
 import 'package:venera_plus/features/cloud_home/cloud_home_controller.dart';
 import 'package:venera_plus/features/cloud_home/cloud_home_source.dart';
+import 'package:venera_plus/features/metadata/metadata_models.dart';
+import 'package:venera_plus/features/metadata/metadata_store.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/network/remote_storage/remote_storage.dart';
@@ -54,6 +56,7 @@ void main() {
     }
     controllers.clear();
     storage.dispose();
+    MetadataStore.resetForTesting();
     await temporary.delete(recursive: true);
   });
 
@@ -130,6 +133,47 @@ void main() {
       CloudHomeItemKind.directory,
     );
   });
+
+  test(
+    'metadata changes update home immediately and removal restores names without remote writes',
+    () async {
+      final remote = _Store({
+        '/Comic/': [_file('/Comic/book.pdf')],
+      });
+      final controller = create(remote);
+      await controller.initialize();
+      final metadata = MetadataStore.app;
+      metadata.save(
+        MetadataBinding(
+          sourceKey: controller.sourceKey,
+          comicId: '/Comic/book.pdf',
+          result: MetadataResult(
+            reference: const MetadataReference(
+              provider: MetadataProviderId.jmcomic,
+              id: '12345',
+              sourceUrl: 'https://jm.example/album/12345/',
+            ),
+            title: 'Matched sample title',
+            coverUrl: 'https://covers.example/sample.jpg',
+          ),
+          cacheCover: false,
+          updatedAt: DateTime(2026),
+        ),
+      );
+      expect(controller.items.single.name, 'Matched sample title');
+      expect(controller.items.single.path, '/Comic/book.pdf');
+      expect(
+        controller.items.single.cover,
+        startsWith('$metadataCoverScheme:'),
+      );
+      expect(remote.calls, ['/Comic/']);
+      metadata.remove(controller.sourceKey, '/Comic/book.pdf');
+      expect(controller.items.single.name, 'book.pdf');
+      expect(controller.items.single.cover, isNull);
+      expect(controller.items.single.path, '/Comic/book.pdf');
+      expect(remote.calls, ['/Comic/']);
+    },
+  );
 
   test('pure image leaves remain readable; mixed image trees stay folders', () {
     expect(

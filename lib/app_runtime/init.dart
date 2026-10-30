@@ -20,6 +20,7 @@ import 'package:venera_plus/features/comic_widgets/comic_widgets.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/features/history/history.dart';
 import 'package:venera_plus/features/local_comics/local_comics.dart';
+import 'package:venera_plus/features/metadata/metadata_service.dart';
 import 'package:venera_plus/features/settings/settings.dart';
 import 'package:venera_plus/features/sync/sync.dart';
 import 'package:venera_plus/features/webdav_library/webdav_library.dart';
@@ -229,6 +230,7 @@ Future<void> prepareReadingDataForExit() async {
 Future<void> init({bool deferBackgroundTasks = false}) async {
   StartupTiming.failedStage = null;
   await StartupTiming.measure('App paths', App.init);
+  configureMetadataCoverLoading();
   await Log.startFileSession(
     File('${App.externalStoragePath ?? App.dataPath}/logs.txt'),
   );

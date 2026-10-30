@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:venera_plus/foundation/cache_manager.dart';
 import 'package:venera_plus/foundation/log.dart';
 import 'package:venera_plus/foundation/res.dart';
+import 'package:venera_plus/features/metadata/metadata_store.dart';
 
 import 'models.dart';
 import 'source.dart';
@@ -53,12 +54,19 @@ extension ComicSourceReadingCache on ComicSource {
     String id, {
     bool refresh = false,
   }) async {
-    if (filePath.isEmpty) return loadComicInfo!(id);
+    if (filePath.isEmpty) {
+      final result = await loadComicInfo!(id);
+      return result.success
+          ? Res(MetadataStore.applyAppDetails(result.data))
+          : result;
+    }
     final cached = await _readReadingCache(
       _readingCacheKey('info', id),
       (value) => ComicDetails.fromJson(Map<String, dynamic>.from(value)),
     );
-    if (!refresh && cached != null) return Res(cached);
+    if (!refresh && cached != null) {
+      return Res(MetadataStore.applyAppDetails(cached));
+    }
     final result = await loadComicInfo!(id);
     if (result.success) {
       final comic = result.data;
@@ -80,7 +88,9 @@ extension ComicSourceReadingCache on ComicSource {
         Log.warning('Reader metadata cache', '$error\n$stack');
       }
     }
-    return result;
+    return result.success
+        ? Res(MetadataStore.applyAppDetails(result.data))
+        : result;
   }
 
   Future<Res<List<String>>> loadComicPagesForReading(

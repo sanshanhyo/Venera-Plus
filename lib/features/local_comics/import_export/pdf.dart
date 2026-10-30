@@ -23,7 +23,7 @@ Future<void> _createPdfFromComic({
       : FilePath.join(localPath, comic.directory);
 
   // add cover
-  images.add(FilePath.join(baseDir, comic.cover));
+  images.add(FilePath.join(baseDir, comic.storedCover));
 
   bool multiChapters = comic.chapters != null;
 

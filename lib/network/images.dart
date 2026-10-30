@@ -21,6 +21,9 @@ typedef ThumbnailLoadingConfigResolver =
 typedef ThumbnailCoverResolver =
     FutureOr<String?> Function(String sourceKey, String cid);
 
+typedef ThumbnailBytesOverrideResolver =
+    Future<Uint8List?> Function(String url);
+
 enum ComicImageTargetFit {
   contain,
   fitWidth,
@@ -208,6 +211,13 @@ abstract class ImageDownloader {
   static ThumbnailLoadingConfigResolver? _thumbnailLoadingConfigResolver;
 
   static ThumbnailCoverResolver? _thumbnailCoverResolver;
+  static ThumbnailBytesOverrideResolver? _thumbnailBytesOverrideResolver;
+
+  static void configureThumbnailBytesOverride(
+    ThumbnailBytesOverrideResolver? resolver,
+  ) {
+    _thumbnailBytesOverrideResolver = resolver;
+  }
 
   static ComicImageLoadingConfigResolver? _comicImageLoadingConfigResolver;
 
@@ -224,6 +234,7 @@ abstract class ImageDownloader {
   @visibleForTesting
   static void debugResetSourceImageLoading() {
     configureSourceImageLoading();
+    _thumbnailBytesOverrideResolver = null;
     _debugLoadComicImageUnwrapped = null;
     _debugComicImageTransport = null;
   }
@@ -412,6 +423,16 @@ abstract class ImageDownloader {
     CancelToken cancelToken,
   ) async* {
     try {
+      final override = await _thumbnailBytesOverrideResolver?.call(url);
+      if (override != null) {
+        if (cancelToken.isCancelled) return;
+        yield ImageDownloadProgress(
+          currentBytes: override.length,
+          totalBytes: override.length,
+          imageBytes: override,
+        );
+        return;
+      }
       final cacheKey = "$url@$sourceKey${cid != null ? '@$cid' : ''}";
       final cache = await CacheManager().findCache(cacheKey);
       if (cancelToken.isCancelled) return;

@@ -7,6 +7,8 @@ import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/webdav_library/webdav_library.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
 import 'package:venera_plus/features/webdav_library/webdav_library_cache.dart';
+import 'package:venera_plus/features/metadata/metadata_models.dart';
+import 'package:venera_plus/features/metadata/metadata_store.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/network/remote_storage/remote_storage.dart';
@@ -41,6 +43,7 @@ void main() {
     appdata.settings['webdavComicLibrary'] = [];
     appdata.settings['webdavComicLibraryPath'] = '/venera_comics/';
     appdata.settings['webdavComicLibraryAutoSync'] = true;
+    MetadataStore.resetForTesting();
     dataDir.deleteSync(recursive: true);
   });
 
@@ -67,6 +70,82 @@ void main() {
     expect(passwordChanged.libraryId, first.libraryId);
     expect(pathChanged.libraryId, isNot(first.libraryId));
   });
+
+  test(
+    'metadata changes notify Explore and reload local results without rescanning remote files',
+    () async {
+      const library = RemoteLibrary(
+        id: 'metadata-library',
+        sourceKey: 'metadata-library',
+        accountId: 'drive',
+        directories: ['/Books/'],
+        name: 'Books',
+        autoRefresh: false,
+      );
+      final remote = _FakeRemoteFileStore('drive')
+        ..dirs['/Books/'] = const [
+          RemoteEntry(
+            name: 'Sample',
+            path: '/Books/Sample/',
+            isDirectory: true,
+          ),
+        ]
+        ..dirs['/Books/Sample/'] = const [
+          RemoteEntry(
+            name: '001.jpg',
+            path: '/Books/Sample/001.jpg',
+            isDirectory: false,
+          ),
+        ];
+      final engine = WebDavLibraryEngine(library: library, store: remote);
+      addTearDown(engine.cancel);
+      final source = engine.create();
+      expect((await engine.synchronize()).success, isTrue);
+      final page = source.explorePages.single;
+      expect(page.changeListenable, same(engine.contentVersion));
+      final original = (await page.loadPage!(1)).data.single;
+      final initialVersion = engine.contentVersion.value;
+      remote.errors['/Books/'] = StateError(
+        'Local metadata updates must not scan',
+      );
+      remote.errors['/Books/Sample/'] = StateError(
+        'Local metadata updates must not inspect',
+      );
+      final metadata = MetadataStore.app;
+      metadata.save(
+        MetadataBinding(
+          sourceKey: source.key,
+          comicId: original.id,
+          result: MetadataResult(
+            reference: const MetadataReference(
+              provider: MetadataProviderId.jmcomic,
+              id: '12345',
+              sourceUrl: 'https://jm.example/album/12345/',
+            ),
+            title: 'Matched title',
+            coverUrl: 'https://covers.example/cover.jpg',
+          ),
+          cacheCover: false,
+          updatedAt: DateTime(2026),
+        ),
+      );
+      expect(engine.contentVersion.value, initialVersion + 1);
+      final updated = (await page.loadPage!(1)).data.single;
+      expect(updated.title, 'Matched title');
+      expect(updated.cover, startsWith('$metadataCoverScheme:'));
+      expect(updated.id, original.id);
+      expect(updated.sourceKey, source.key);
+      metadata.remove(source.key, original.id);
+      expect(engine.contentVersion.value, initialVersion + 2);
+      final restored = (await page.loadPage!(1)).data.single;
+      expect(restored.title, original.title);
+      expect(restored.cover, original.cover);
+      engine.cancel();
+      final cancelledVersion = engine.contentVersion.value;
+      metadata.remove(source.key, original.id);
+      expect(engine.contentVersion.value, cancelledVersion);
+    },
+  );
 
   test(
     'legacy snapshot migrates after its import clears the migration marker',

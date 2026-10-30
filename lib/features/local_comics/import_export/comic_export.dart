@@ -122,12 +122,12 @@ class ComicExportInfo {
     final chapters = comic.chapters?.toJson() ?? <String, dynamic>{};
     return ComicExportInfo(
       id: comic.id,
-      title: comic.title,
-      subtitle: comic.subtitle,
-      tags: comic.tags,
+      title: comic.storedTitle,
+      subtitle: comic.storedSubtitle,
+      tags: comic.storedTags,
       directory: comic.directory,
       chapters: chapters,
-      cover: comic.cover,
+      cover: comic.storedCover,
       comicType: comic.comicType.value,
       downloadedChapters: comic.downloadedChapters,
       createdAt: comic.createdAt.millisecondsSinceEpoch,
