@@ -18,6 +18,7 @@ class CloudHomeDirectoryCache {
     : _directoryPath = directoryPath;
 
   final String? _directoryPath;
+  static final _writeTails = <String, Future<void>>{};
   String get _root => _directoryPath ?? '${App.dataPath}/cloud_home';
 
   File _file(String scope, String directory) {
@@ -70,8 +71,29 @@ class CloudHomeDirectoryCache {
   Future<void> write(
     String scope,
     String directory,
+    CloudHomeDirectorySnapshot snapshot, {
+    bool Function()? isCurrent,
+  }) {
+    final path = _file(scope, directory).path;
+    final previous = _writeTails[path] ?? Future<void>.value();
+    late final Future<void> next;
+    next = previous
+        .catchError((Object _) {})
+        .then((_) => _writeSnapshot(scope, directory, snapshot, isCurrent))
+        .whenComplete(() {
+          if (identical(_writeTails[path], next)) _writeTails.remove(path);
+        });
+    _writeTails[path] = next;
+    return next;
+  }
+
+  Future<void> _writeSnapshot(
+    String scope,
+    String directory,
     CloudHomeDirectorySnapshot snapshot,
+    bool Function()? isCurrent,
   ) async {
+    if (isCurrent?.call() == false) return;
     final file = _file(scope, directory);
     await file.parent.create(recursive: true);
     final temporary = File(
@@ -97,7 +119,7 @@ class CloudHomeDirectoryCache {
         }),
         flush: true,
       );
-      await temporary.rename(file.path);
+      if (isCurrent?.call() != false) await temporary.rename(file.path);
     } finally {
       if (await temporary.exists()) await temporary.delete();
     }

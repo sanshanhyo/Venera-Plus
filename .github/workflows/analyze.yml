@@ -58,6 +58,7 @@ jobs:
       - name: 运行测试文件分片
         env:
           SHARD_INDEX: ${{ matrix.shard }}
+          CLOUD_HOME_CAPTURE_DIR: build/ci-screenshots
         run: |
           mapfile -d '' -t test_files < <(find test -type f -name '*_test.dart' -print0 | LC_ALL=C sort -z)
           shard_files=()
@@ -72,6 +73,14 @@ jobs:
           fi
           echo "测试分片 $SHARD_INDEX：${#shard_files[@]} 个文件"
           flutter test --no-pub --coverage "${shard_files[@]}"
+      - name: 上传云端书架截图
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloud-home-screenshots-${{ matrix.shard }}
+          path: build/ci-screenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 7
       - name: 上传分片覆盖率报告
         uses: actions/upload-artifact@v7
         with:

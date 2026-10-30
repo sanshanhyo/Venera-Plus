@@ -17,6 +17,22 @@ const _account = StorageAccount(
   authorization: {},
 );
 const _location = RemoteLocation(accountId: 'drive', directory: '/Comic/');
+const _library = RemoteLibrary(
+  id: 'library',
+  sourceKey: 'remote_library_test',
+  accountId: 'drive',
+  directories: ['/Comic/'],
+  name: 'Comics',
+  autoRefresh: false,
+);
+const _otherLibrary = RemoteLibrary(
+  id: 'other-library',
+  sourceKey: 'remote_library_other',
+  accountId: 'drive',
+  directories: ['/Other/'],
+  name: 'Other',
+  autoRefresh: false,
+);
 
 RemoteEntry _file(String path, {String? eTag}) => RemoteEntry(
   name: path.split('/').last,
@@ -43,6 +59,7 @@ void main() {
     App.cachePath = temporary.path;
     appdata.settings.replaceAll({
       remoteStorageAccountsSetting: [_account.toJson()],
+      remoteLibrariesSetting: [_library.toJson(), _otherLibrary.toJson()],
       homeRemoteLocationSetting: _location.toJson(),
     });
     storage = RemoteStorageAccounts();
@@ -67,7 +84,7 @@ void main() {
       cache: CloudHomeDirectoryCache(
         directoryPath: '${temporary.path}/directory-cache',
       ),
-      ensureSource: (location) async => cloudHomeLibrary(location).sourceKey,
+      ensureSource: (library) async => library.sourceKey,
       preloadComic: preloadComic ?? (_, _) async => null,
     );
     controllers.add(controller);
@@ -152,7 +169,7 @@ void main() {
   });
 
   test(
-    'PDF collections browse original files without chapter mapping',
+    'PDF collections warm the collection reader instead of its first file',
     () async {
       final store = _Store({
         '/Comic/': [_folder('/Comic/阿衰/')],
@@ -175,8 +192,9 @@ void main() {
       final collection = controller.items.single;
       expect(collection.kind, CloudHomeItemKind.pdfCollection);
       expect(collection.fileCount, 3);
-      expect(collection.cover, 'cover:/Comic/阿衰/阿衰_chapter7.pdf');
-      expect(warmed, ['/Comic/阿衰/阿衰_chapter7.pdf']);
+      expect(collection.isReadable, isTrue);
+      expect(collection.cover, 'cover:/Comic/阿衰/');
+      expect(warmed, ['/Comic/阿衰/']);
       await controller.openDirectory(collection.path);
       expect(controller.items.map((item) => item.name), [
         '阿衰_chapter7.pdf',
@@ -426,10 +444,8 @@ void main() {
     });
     final controller = create(store);
     await controller.initialize();
-    appdata.settings[homeRemoteLocationSetting] = const RemoteLocation(
-      accountId: 'drive',
-      directory: '/Other/',
-    ).toJson();
+    appdata.settings[homeRemoteLibraryMountSetting] =
+        const CloudHomeLibraryMount(libraryId: 'other-library').toJson();
     await _until(
       () => controller.directory == '/Other/' && !controller.isLoading,
     );
@@ -439,6 +455,383 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test('unique legacy binding adopts its imported library source', () async {
+    final store = _Store({
+      '/Comic/': [_file('/Comic/book.pdf')],
+    });
+    final controller = create(store);
+    await controller.initialize();
+    expect(controller.mountedLibrary!.id, _library.id);
+    expect(controller.sourceKey, _library.sourceKey);
+    expect(readCloudHomeMount()!.libraryId, _library.id);
+    expect(appdata.settings[homeRemoteLocationSetting], isNull);
+    expect(readCloudHomeSources(), isEmpty);
+  });
+
+  test(
+    'legacy manual folder choices migrate only within the adopted library',
+    () async {
+      final legacySource = cloudHomeLibrary(_location).sourceKey;
+      appdata.settings['homeRemoteDirectoryOverrides'] = {
+        legacySource: {'/Comic/book/': 'folder', '/Other/book/': 'comic'},
+      };
+      final controller = create(
+        _Store({
+          '/Comic/': [_folder('/Comic/book/')],
+          '/Comic/book/': [_file('/Comic/book/1.pdf')],
+        }),
+      );
+      await controller.initialize();
+      await controller.preload(start: 0, count: 1);
+      expect(
+        controller.directoryOverride('/Comic/book/'),
+        CloudHomeDirectoryOverride.folder,
+      );
+      expect(
+        controller.directoryOverride('/Other/book/'),
+        CloudHomeDirectoryOverride.automatic,
+      );
+      expect(controller.items.single.kind, CloudHomeItemKind.directory);
+    },
+  );
+
+  test(
+    'mixed PDF archives cannot be forced into an unreadable collection',
+    () async {
+      appdata.settings['homeRemoteDirectoryOverrides'] = {
+        _library.sourceKey: {'/Comic/book/': 'comic'},
+      };
+      final controller = create(
+        _Store({
+          '/Comic/': [_folder('/Comic/book/')],
+          '/Comic/book/': [
+            _file('/Comic/book/1.pdf'),
+            _file('/Comic/book/2.zip'),
+          ],
+        }),
+      );
+      await controller.initialize();
+      expect(controller.items.single.kind, CloudHomeItemKind.directory);
+      await controller.preload(start: 0, count: 1);
+      expect(controller.items.single.kind, CloudHomeItemKind.directory);
+      await expectLater(
+        controller.setDirectoryOverride(
+          '/Comic/book/',
+          CloudHomeDirectoryOverride.comic,
+        ),
+        throwsA(isA<CloudHomeUnsupportedComicFolder>()),
+      );
+      await controller.openDirectory('/Comic/book/');
+      expect(controller.items, hasLength(2));
+    },
+  );
+
+  test(
+    'opening an unclassified PDF collection resolves only that item without covers',
+    () async {
+      var warmed = 0;
+      final store = _Store({
+        '/Comic/': [_folder('/Comic/book/')],
+        '/Comic/book/': [_file('/Comic/book/1.pdf')],
+      });
+      final controller = create(
+        store,
+        preloadComic: (_, _) async {
+          warmed++;
+          return null;
+        },
+      );
+      await controller.initialize();
+      expect(controller.items.single.kind, CloudHomeItemKind.directory);
+      final resolved = await controller.resolveItemForOpen(
+        controller.items.single,
+      );
+      expect(resolved!.kind, CloudHomeItemKind.pdfCollection);
+      expect(resolved.isReadable, isTrue);
+      expect(controller.directory, '/Comic/');
+      expect(store.calls, ['/Comic/', '/Comic/book/']);
+      expect(warmed, 0);
+    },
+  );
+
+  test(
+    'manual refresh reclassifies direct children even when directory metadata is unchanged',
+    () async {
+      final store = _Store({
+        '/Comic/': [_folder('/Comic/book/')],
+        '/Comic/book/': [_file('/Comic/book/1.pdf')],
+      });
+      final controller = create(store);
+      await controller.initialize();
+      await controller.preload(start: 0, count: 1);
+      expect(controller.items.single.kind, CloudHomeItemKind.pdfCollection);
+      store.entries['/Comic/book/'] = [
+        _file('/Comic/book/1.pdf'),
+        _file('/Comic/book/2.zip'),
+      ];
+      await controller.refresh();
+      await controller.preload(start: 0, count: 1);
+      expect(controller.items.single.kind, CloudHomeItemKind.directory);
+      expect(store.calls.where((path) => path == '/Comic/book/'), hasLength(2));
+      await controller.openDirectory('/Comic/book/');
+      expect(controller.items, hasLength(2));
+    },
+  );
+
+  test(
+    'an old item cannot resolve through a different mounted account at the same path',
+    () async {
+      const otherAccount = StorageAccount(
+        id: 'second-drive',
+        backend: StorageBackend.webdav,
+        driver: 'WebDAV',
+        name: 'Second drive',
+        authorization: {},
+      );
+      const duplicatePathLibrary = RemoteLibrary(
+        id: 'duplicate-path',
+        sourceKey: 'remote_library_duplicate_path',
+        accountId: 'second-drive',
+        directories: ['/Comic/'],
+        name: 'Same path on another account',
+        autoRefresh: false,
+      );
+      appdata.settings[remoteStorageAccountsSetting] = [
+        _account.toJson(),
+        otherAccount.toJson(),
+      ];
+      appdata.settings[remoteLibrariesSetting] = [
+        _library.toJson(),
+        duplicatePathLibrary.toJson(),
+      ];
+      final store = _Store({
+        '/Comic/': [_folder('/Comic/book/')],
+        '/Comic/book/': [_file('/Comic/book/1.pdf')],
+      });
+      final controller = create(store);
+      await controller.initialize();
+      final oldItem = controller.items.single;
+      await controller.bindLibrary(duplicatePathLibrary.id);
+      final before = store.calls.length;
+      expect(await controller.resolveItemForOpen(oldItem), isNull);
+      expect(store.calls, hasLength(before));
+      final current = await controller.resolveItemForOpen(
+        controller.items.single,
+      );
+      expect(current!.kind, CloudHomeItemKind.pdfCollection);
+      expect(store.calls.last, '/Comic/book/');
+    },
+  );
+
+  test(
+    'a pre-refresh child response cannot overwrite newer classification or disk cache',
+    () async {
+      final old = Completer<List<RemoteEntry>>();
+      final started = Completer<void>();
+      var childCalls = 0;
+      final store =
+          _Store({
+              '/Comic/': [_folder('/Comic/book/')],
+              '/Comic/book/': [
+                _file('/Comic/book/1.pdf'),
+                _file('/Comic/book/2.zip'),
+              ],
+            })
+            ..onList = (path) async {
+              if (path == '/Comic/book/' && ++childCalls == 1) {
+                started.complete();
+                return old.future;
+              }
+              return null;
+            };
+      final controller = create(store);
+      await controller.initialize();
+      final previous = controller.preload(start: 0, count: 1);
+      await started.future;
+      await controller.refresh();
+      await controller.preload(start: 0, count: 1);
+      expect(controller.items.single.kind, CloudHomeItemKind.directory);
+      old.complete([_file('/Comic/book/1.pdf')]);
+      await previous;
+      expect(controller.items.single.kind, CloudHomeItemKind.directory);
+      controller.dispose();
+      final offline = create(
+        _Store({})..onList = (_) async => throw StateError('Offline'),
+      );
+      await offline.initialize();
+      await offline.preload(start: 0, count: 1);
+      expect(offline.items.single.kind, CloudHomeItemKind.directory);
+    },
+  );
+
+  test(
+    'ambiguous legacy locations require an imported library selection',
+    () async {
+      appdata.settings[remoteLibrariesSetting] = [
+        _library.toJson(),
+        _otherLibrary.toJson(),
+        const RemoteLibrary(
+          id: 'overlapping',
+          sourceKey: 'remote_library_overlapping',
+          accountId: 'drive',
+          directories: ['/Comic/'],
+          name: 'Overlapping',
+          autoRefresh: false,
+        ).toJson(),
+      ];
+      final store = _Store({});
+      final controller = create(store);
+      await controller.initialize();
+      expect(controller.mountedLibrary, isNull);
+      expect(controller.location, isNull);
+      expect(store.calls, isEmpty);
+      expect(readCloudHomeSources(), isEmpty);
+      await expectLater(controller.bind(_location), throwsArgumentError);
+      await controller.bindLibrary(_library.id);
+      expect(controller.directory, '/Comic/');
+      expect(controller.sourceKey, _library.sourceKey);
+    },
+  );
+
+  test(
+    'multiple roots use a virtual library home without listing the server root',
+    () async {
+      final multi = _library.copyWith(directories: ['/Comic/', '/Other/']);
+      appdata.settings[remoteLibrariesSetting] = [multi.toJson()];
+      appdata.settings[homeRemoteLibraryMountSetting] = CloudHomeLibraryMount(
+        libraryId: multi.id,
+      ).toJson();
+      final store = _Store({
+        '/Comic/': [_folder('/Comic/series/')],
+        '/Other/': [_file('/Other/book.pdf')],
+      });
+      final controller = create(store);
+      await controller.initialize();
+      expect(controller.isVirtualLibraryRoot, isTrue);
+      expect(controller.directory, isEmpty);
+      expect(controller.items.map((item) => item.path), ['/Comic/', '/Other/']);
+      expect(controller.items.every((item) => !item.isReadable), isTrue);
+      expect(controller.canGoUp, isFalse);
+      expect(store.calls, isEmpty);
+      await controller.openDirectory('/Other/');
+      expect(controller.directory, '/Other/');
+      expect(controller.canGoUp, isTrue);
+      await controller.goUp();
+      expect(controller.isVirtualLibraryRoot, isTrue);
+      expect(store.calls, ['/Other/']);
+      await expectLater(controller.openDirectory('/'), throwsArgumentError);
+      await expectLater(
+        controller.openDirectory('/OtherSibling/'),
+        throwsArgumentError,
+      );
+      await expectLater(
+        controller.openDirectory('/Comic/../'),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'optional home directory and its picker stay inside imported roots',
+    () async {
+      final multi = _library.copyWith(directories: ['/Comic/', '/Other/']);
+      appdata.settings[remoteLibrariesSetting] = [multi.toJson()];
+      final store = _Store({
+        '/Comic/': [_folder('/Comic/series/'), _file('/Comic/book.pdf')],
+        '/Comic/series/': [_folder('/Comic/series/next/')],
+        '/Other/': [],
+      });
+      final controller = create(store);
+      await controller.initialize();
+      final roots = await controller.listLibraryDirectories(multi.id);
+      expect(roots.map((entry) => entry.path), ['/Comic/', '/Other/']);
+      final folders = await controller.listLibraryDirectories(
+        multi.id,
+        directory: '/Comic/',
+      );
+      expect(folders.map((entry) => entry.path), ['/Comic/series/']);
+      await expectLater(
+        controller.listLibraryDirectories(multi.id, directory: '/'),
+        throwsArgumentError,
+      );
+      await controller.openDirectory('/Comic/series/');
+      await controller.setCurrentDirectoryAsHome();
+      expect(controller.mount!.directory, '/Comic/series/');
+      expect(controller.canGoUp, isFalse);
+      await expectLater(
+        controller.openDirectory('/Other/'),
+        throwsArgumentError,
+      );
+      expect(controller.allowsDirectory('/Other/'), isTrue);
+      await controller.bindLibrary(multi.id);
+      expect(controller.isVirtualLibraryRoot, isTrue);
+    },
+  );
+
+  test(
+    'nested imported roots return through the root that was actually entered',
+    () async {
+      final nested = _library.copyWith(
+        directories: ['/Comic/', '/Comic/Series/'],
+      );
+      appdata.settings[remoteLibrariesSetting] = [nested.toJson()];
+      appdata.settings[homeRemoteLibraryMountSetting] = CloudHomeLibraryMount(
+        libraryId: nested.id,
+      ).toJson();
+      final controller = create(
+        _Store({
+          '/Comic/': [_folder('/Comic/Series/')],
+          '/Comic/Series/': [],
+        }),
+      );
+      await controller.initialize();
+      await controller.openDirectory('/Comic/');
+      await controller.openDirectory('/Comic/Series/');
+      await controller.goUp();
+      expect(controller.directory, '/Comic/');
+      await controller.goUp();
+      expect(controller.isVirtualLibraryRoot, isTrue);
+      await controller.openDirectory('/Comic/Series/');
+      await controller.goUp();
+      expect(controller.isVirtualLibraryRoot, isTrue);
+    },
+  );
+
+  test(
+    'library edits refresh the mount and deletion does not retain an orphan account binding',
+    () async {
+      final store = _Store({
+        '/Comic/': [_folder('/Comic/series/')],
+        '/Comic/series/': [],
+        '/Other/': [_file('/Other/new.pdf')],
+      });
+      final controller = create(store);
+      await controller.initialize();
+      await controller.openDirectory('/Comic/series/');
+      appdata.settings[remoteLibrariesSetting] = [
+        _library.copyWith(name: 'Renamed').toJson(),
+      ];
+      await _until(
+        () =>
+            controller.mountedLibrary?.name == 'Renamed' &&
+            !controller.isLoading,
+      );
+      expect(controller.directory, '/Comic/series/');
+      appdata.settings[remoteLibrariesSetting] = [
+        _library.copyWith(directories: ['/Other/']).toJson(),
+      ];
+      await _until(
+        () => controller.directory == '/Other/' && !controller.isLoading,
+      );
+      expect(controller.mount!.directory, isNull);
+      appdata.settings[remoteLibrariesSetting] = [];
+      await _until(() => controller.mountedLibrary == null);
+      expect(controller.location, isNull);
+      expect(controller.items, isEmpty);
+      expect(controller.error, contains('unavailable'));
+    },
+  );
 }
 
 Future<void> _until(bool Function() ready) async {

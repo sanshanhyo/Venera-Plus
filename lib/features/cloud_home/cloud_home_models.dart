@@ -11,14 +11,57 @@ enum CloudHomeItemKind {
 
 enum CloudHomeDirectoryOverride { automatic, folder, comic }
 
-/// A direct child of the directory being browsed. Collections remain file
-/// browsers: their files keep their own comic IDs and reading progress.
+class CloudHomeUnsupportedComicFolder implements Exception {
+  const CloudHomeUnsupportedComicFolder();
+
+  static const message =
+      'This folder contains mixed or unsupported files. Keep it as a folder.';
+
+  @override
+  String toString() => message;
+}
+
+/// The home mounts an already imported comic library. An absent directory
+/// means the library's home: its only root, or a virtual list of its roots.
+class CloudHomeLibraryMount {
+  const CloudHomeLibraryMount({required this.libraryId, this.directory});
+
+  final String libraryId;
+  final String? directory;
+
+  CloudHomeLibraryMount normalized() => CloudHomeLibraryMount(
+    libraryId: libraryId,
+    directory: directory == null ? null : normalizeRemoteDirectory(directory!),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'libraryId': libraryId,
+    if (directory != null) 'directory': normalizeRemoteDirectory(directory!),
+  };
+
+  factory CloudHomeLibraryMount.fromJson(Map<Object?, Object?> json) {
+    final directory = json['directory'];
+    if (directory != null && directory is! String) {
+      throw const FormatException('Invalid cloud home directory');
+    }
+    return CloudHomeLibraryMount(
+      libraryId: json['libraryId'] as String? ?? '',
+      directory: directory is String && directory.trim().isNotEmpty
+          ? normalizeRemoteDirectory(directory)
+          : null,
+    );
+  }
+}
+
+/// A direct child of the directory being browsed. PDF collections open as one
+/// comic whose chapters are the directory's direct PDF files.
 class CloudHomeItem {
   const CloudHomeItem({
     required this.entry,
     required this.kind,
     this.fileCount,
     this.cover,
+    this.bindingToken,
   });
 
   final RemoteEntry entry;
@@ -26,22 +69,28 @@ class CloudHomeItem {
   final int? fileCount;
   final String? cover;
 
+  /// Opaque controller binding identity. It is never persisted or rendered.
+  final Object? bindingToken;
+
   String get name => entry.name;
   String get path => entry.path;
   bool get isDirectory => entry.isDirectory;
   bool get isReadable =>
       kind == CloudHomeItemKind.comicFile ||
-      kind == CloudHomeItemKind.imageComic;
+      kind == CloudHomeItemKind.imageComic ||
+      kind == CloudHomeItemKind.pdfCollection;
 
   CloudHomeItem copyWith({
     CloudHomeItemKind? kind,
     int? fileCount,
     String? cover,
+    Object? bindingToken,
   }) => CloudHomeItem(
     entry: entry,
     kind: kind ?? this.kind,
     fileCount: fileCount ?? this.fileCount,
     cover: cover ?? this.cover,
+    bindingToken: bindingToken ?? this.bindingToken,
   );
 }
 
@@ -95,7 +144,12 @@ CloudHomeItemKind classifyCloudHomeDirectory(
         files.every((entry) => isComicImageFileName(entry.name))) {
       return CloudHomeItemKind.imageComic;
     }
-    return CloudHomeItemKind.pdfCollection;
+    if (directories.isEmpty &&
+        files.isNotEmpty &&
+        files.every((entry) => comicFileExtension(entry.name) == 'pdf')) {
+      return CloudHomeItemKind.pdfCollection;
+    }
+    return CloudHomeItemKind.directory;
   }
   if (directories.isEmpty &&
       files.isNotEmpty &&

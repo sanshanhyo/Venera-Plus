@@ -4,7 +4,8 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/sqlite_connection.dart';
 
-const webDavLibrarySnapshotFormatVersion = 9;
+const webDavLibrarySnapshotFormatVersion = 10;
+const webDavLibraryRecognitionVersion = 2;
 
 class WebDavLibraryCachedComic {
   const WebDavLibraryCachedComic({
@@ -157,13 +158,19 @@ class WebDavLibraryCache {
       CREATE TABLE IF NOT EXISTS webdav_library_state (
         config_key TEXT PRIMARY KEY,
         last_successful_sync INTEGER NOT NULL DEFAULT 0,
-        index_initialized INTEGER NOT NULL DEFAULT 0
+        index_initialized INTEGER NOT NULL DEFAULT 0,
+        recognition_version INTEGER NOT NULL DEFAULT 0
       );
     ''');
     final stateColumns = db.select('PRAGMA table_info(webdav_library_state);');
     if (!stateColumns.any((row) => row['name'] == 'index_initialized')) {
       db.execute(
         'ALTER TABLE webdav_library_state ADD COLUMN index_initialized INTEGER NOT NULL DEFAULT 0;',
+      );
+    }
+    if (!stateColumns.any((row) => row['name'] == 'recognition_version')) {
+      db.execute(
+        'ALTER TABLE webdav_library_state ADD COLUMN recognition_version INTEGER NOT NULL DEFAULT 0;',
       );
     }
     _db = db;
@@ -284,11 +291,14 @@ class WebDavLibraryCache {
       db.execute(
         '''
         INSERT INTO webdav_library_state(
-          config_key, last_successful_sync, index_initialized
-        ) VALUES (?, 0, 1)
-        ON CONFLICT(config_key) DO UPDATE SET index_initialized = 1;
+          config_key, last_successful_sync, index_initialized,
+          recognition_version
+        ) VALUES (?, 0, 1, ?)
+        ON CONFLICT(config_key) DO UPDATE SET
+          index_initialized = 1,
+          recognition_version = excluded.recognition_version;
         ''',
-        [configKey],
+        [configKey, webDavLibraryRecognitionVersion],
       );
       db.execute('COMMIT;');
     } catch (_) {
@@ -461,22 +471,26 @@ class WebDavLibraryCache {
 
   bool hasDirectoryIndex(String configKey) {
     final rows = _database.select(
-      'SELECT index_initialized FROM webdav_library_state WHERE config_key = ?;',
+      'SELECT index_initialized, recognition_version FROM webdav_library_state WHERE config_key = ?;',
       [configKey],
     );
-    return rows.isNotEmpty && rows.single['index_initialized'] == 1;
+    return rows.isNotEmpty &&
+        rows.single['index_initialized'] == 1 &&
+        rows.single['recognition_version'] == webDavLibraryRecognitionVersion;
   }
 
   void setLastSuccessfulSync(String configKey, int timestamp) {
     _database.execute(
       '''
-      INSERT INTO webdav_library_state(config_key, last_successful_sync, index_initialized)
-      VALUES (?, ?, 1)
+      INSERT INTO webdav_library_state(
+        config_key, last_successful_sync, index_initialized, recognition_version
+      ) VALUES (?, ?, 1, ?)
       ON CONFLICT(config_key) DO UPDATE SET
         last_successful_sync = excluded.last_successful_sync,
-        index_initialized = 1;
+        index_initialized = 1,
+        recognition_version = excluded.recognition_version;
       ''',
-      [configKey, timestamp],
+      [configKey, timestamp, webDavLibraryRecognitionVersion],
     );
   }
 

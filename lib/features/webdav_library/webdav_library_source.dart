@@ -18,6 +18,7 @@ import 'package:venera_plus/foundation/throttled_task_runner.dart';
 import 'package:venera_plus/network/webdav.dart';
 import 'package:venera_plus/network/remote_storage/remote_storage.dart';
 import 'remote_archive_comic.dart';
+import 'remote_pdf_collection.dart';
 import 'package:webdav_client/webdav_client.dart' hide File;
 
 typedef WebDavLibraryMetadataScraper =
@@ -1668,6 +1669,10 @@ class WebDavLibrarySource {
         }
         return Res(images.map(archive.imageKey).toList());
       }
+      if (ep?.startsWith(remotePdfChapterPrefix) == true) {
+        final snapshot = await _loadSnapshot(config, id);
+        return await _loadPdfCollectionPages(config, snapshot, ep);
+      }
       final comicPath = config.childDirectoryPath(id);
       if (ep != null &&
           ep != rootChapterId &&
@@ -1681,6 +1686,9 @@ class WebDavLibrarySource {
             snapshot = _WebDavComicSnapshot.fromJson(cached!.snapshot!);
             _snapshotCache[memoryKey] = snapshot;
           }
+        }
+        if (snapshot?.pdfChapters.isNotEmpty == true) {
+          return const Res.error('Invalid PDF collection chapter');
         }
         final cachedImages = snapshot?.chapterImages[ep];
         if (cachedImages != null) {
@@ -1702,6 +1710,9 @@ class WebDavLibrarySource {
       }
 
       final snapshot = await _loadSnapshot(config, id);
+      if (snapshot.pdfChapters.isNotEmpty) {
+        return await _loadPdfCollectionPages(config, snapshot, ep);
+      }
       final metadataChapter = ep == null ? null : snapshot.metadataChapters[ep];
       if (metadataChapter != null) {
         final files = snapshot.rootImages
@@ -1726,6 +1737,35 @@ class WebDavLibrarySource {
     } catch (e) {
       return Res.error(e.toString());
     }
+  }
+
+  static Future<Res<List<String>>> _loadPdfCollectionPages(
+    WebDavLibraryConfig config,
+    _WebDavComicSnapshot snapshot,
+    String? episode,
+  ) async {
+    final chapter = episode ?? snapshot.pdfChapters.keys.firstOrNull;
+    final path = snapshot.pdfChapters[chapter];
+    if (path == null) {
+      return const Res.error('Invalid PDF collection chapter');
+    }
+    // Refresh only the selected file. This validates replacements/deletions
+    // without opening every volume merely to build the chapter list.
+    final file = await _loadSnapshot(
+      config,
+      _stableComicPath(config, path),
+      forceRefresh: true,
+    );
+    final archive = file.archive;
+    if (archive == null || !archive.isPdf || archive.pdfPageCount == null) {
+      return const Res.error('PDF chapter could not be opened');
+    }
+    // One file is one outer chapter. Its bookmarks still work when opened as
+    // a standalone PDF, but must not split this collection's chapter list.
+    return Res([
+      for (var page = 1; page <= archive.pdfPageCount!; page++)
+        archive.imageKey('pdf:$page'),
+    ]);
   }
 
   static Future<_WebDavComicSnapshot> _loadSnapshot(
@@ -2122,6 +2162,11 @@ class WebDavLibrarySource {
             .where((entry) => !_isIgnoredEntry(entry.name))
             .toList()
           ..sort((a, b) => compareComicFileNames(a.name, b.name));
+    final pdfFiles = pdfCollectionFiles(
+      entries,
+      nameOf: (entry) => entry.name,
+      isDirectory: (entry) => entry.isDirectory,
+    );
     var metadataFilePresent = _hasMetadataFile(entries);
     var metadataScrapeStatus = metadataFilePresent
         ? 'notNeeded'
@@ -2137,7 +2182,9 @@ class WebDavLibrarySource {
       config,
       comicPath,
       entries,
-      pageCount: directories.isEmpty ? rootImages.length : null,
+      pageCount: directories.isEmpty && pdfFiles == null
+          ? rootImages.length
+          : null,
     );
     if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
     final shouldScrape = _shouldAttemptMetadataScrape(
@@ -2153,7 +2200,9 @@ class WebDavLibrarySource {
         config,
         id,
         comicPath,
-        pageCount: directories.isEmpty ? rootImages.length : null,
+        pageCount: directories.isEmpty && pdfFiles == null
+            ? rootImages.length
+            : null,
         syncRun: syncRun,
       );
       if (syncRun != null) _throwIfSynchronizationObsolete(syncRun);
@@ -2172,6 +2221,7 @@ class WebDavLibrarySource {
 
     final metadataChapters = <String, ComicChapter>{};
     final chapterMap = <String, String>{};
+    final pdfChapters = <String, String>{};
     var chaptersInspected = true;
     final namedCover = _findNamedCover(entries);
     String? coverPath = namedCover == null
@@ -2180,7 +2230,27 @@ class WebDavLibrarySource {
     if (rootImages.isNotEmpty) {
       coverPath ??= config.childFilePath(comicPath, rootImages.first.name);
     }
-    if (directories.isNotEmpty) {
+    if (pdfFiles != null) {
+      for (final file in pdfFiles) {
+        final path = config.childFilePath(comicPath, file.name);
+        final chapter = remotePdfChapterId(path);
+        chapterMap[chapter] = comicFileStem(file.name);
+        pdfChapters[chapter] = path;
+      }
+      if (coverPath == null) {
+        final firstPath = pdfChapters.values.first;
+        final first = await _loadSnapshot(
+          config,
+          _stableComicPath(config, firstPath),
+          forceRefresh: true,
+          summaryOnly: true,
+          archiveFile: pdfFiles.first,
+          rootEntries: entries,
+          syncRun: syncRun,
+        );
+        coverPath = first.cover;
+      }
+    } else if (directories.isNotEmpty) {
       for (final directory in directories) {
         var chapterEntries = inspectedChapterEntries[directory.name];
         if (chapterEntries == null) {
@@ -2264,6 +2334,7 @@ class WebDavLibrarySource {
                 .map((image) => image.name)
                 .toList(),
       },
+      pdfChapters: pdfChapters,
       metadataChapters: metadataChapters,
       rootImages: rootImages,
       bangumiSubjectId: metadata?.bangumiSubjectId,
@@ -2944,8 +3015,7 @@ class WebDavLibrarySource {
     ).hasMatch(normalized);
   }
 
-  /// Shared with the direct-directory home browser; this retains the existing
-  /// image-comic layout rules without introducing PDF chapter inference.
+  /// Shared with the direct-directory home browser for image chapter folders.
   static bool isChapterDirectoryName(String name) =>
       _looksLikeChapterName(name);
 
@@ -3004,7 +3074,14 @@ class WebDavLibrarySource {
       required bool preserveFallback,
     }) async {
       _throwIfSynchronizationObsolete(syncRun);
-      final archiveComics = await archives(entries, id);
+      final pdfFiles = pdfCollectionFiles(
+        entries,
+        nameOf: (entry) => entry.name,
+        isDirectory: (entry) => entry.isDirectory,
+      );
+      final archiveComics = pdfFiles == null
+          ? await archives(entries, id)
+          : <_WebDavDiscoveredDirectory>[];
       final chapterArchives = <_WebDavDiscoveredDirectory>[];
       final version = _directoryContentVersion(directory, entries);
       Future<List<_WebDavDiscoveredDirectory>> current({
@@ -3021,6 +3098,7 @@ class WebDavLibrarySource {
         return [comic, ...archiveComics, ...chapterArchives];
       }
 
+      if (pdfFiles != null) return current();
       if (_hasMetadataFile(entries) ||
           _imageEntries(
             entries,
@@ -3093,7 +3171,14 @@ class WebDavLibrarySource {
         _throwIfSynchronizationObsolete(syncRun);
         children.add((directory: child, id: childId, entries: childEntries));
         childEntriesMap[child.name] = childEntries;
-        final childArchives = await archives(childEntries, childId);
+        final childPdfFiles = pdfCollectionFiles(
+          childEntries,
+          nameOf: (entry) => entry.name,
+          isDirectory: (entry) => entry.isDirectory,
+        );
+        final childArchives = childPdfFiles == null
+            ? await archives(childEntries, childId)
+            : <_WebDavDiscoveredDirectory>[];
         chapterArchives.addAll(childArchives);
         nested.addAll(childArchives);
         final pages = _imageEntries(
@@ -3396,6 +3481,16 @@ class WebDavLibraryEngine {
   ValueNotifier<WebDavLibrarySyncStatus> get syncStatus =>
       _context.state.syncStatus;
   String get libraryId => library.id;
+
+  /// The same identity used by the recursive index, including legacy relative
+  /// IDs. A bookshelf must not create a second history entry for the same file.
+  String comicIdForPath(String absolutePath) {
+    if (!absolutePath.startsWith('/')) {
+      throw ArgumentError.value(absolutePath, 'absolutePath');
+    }
+    return WebDavLibrarySource._stableComicPath(_context.config, absolutePath);
+  }
+
   Map<String, String> get failedRoots =>
       WebDavLibraryCache.instance.rootFailures(_context.config.cacheKey);
 
@@ -3458,7 +3553,10 @@ class WebDavLibraryEngine {
       _context.config.cacheKey,
     );
     final elapsed = DateTime.now().millisecondsSinceEpoch - lastSync;
-    if (lastSync == 0 ||
+    if (!WebDavLibraryCache.instance.hasDirectoryIndex(
+          _context.config.cacheKey,
+        ) ||
+        lastSync == 0 ||
         elapsed >=
             Duration(
               minutes: library.refreshIntervalMinutes.clamp(5, 24 * 60),
@@ -3552,9 +3650,9 @@ class WebDavLibraryEngine {
   /// This does not discover siblings or change its comic/history identity.
   Future<void> prepareDirectoryBrowserEntry(RemoteEntry entry) =>
       _run(() async {
-        if (!_directoryBrowser || _cancelled) return;
+        if (_cancelled) return;
         final config = _context.config;
-        final id = entry.path;
+        final id = comicIdForPath(entry.path);
         final memoryKey = jsonEncode([config.cacheKey, id]);
         try {
           await _context.state.snapshotInFlight[memoryKey];
@@ -3765,6 +3863,7 @@ class _WebDavComicSnapshot {
     required this.chapters,
     this.chaptersInspected = true,
     required this.chapterImages,
+    this.pdfChapters = const {},
     required this.metadataChapters,
     required this.rootImages,
     required this.bangumiSubjectId,
@@ -3785,6 +3884,7 @@ class _WebDavComicSnapshot {
   final Map<String, String> chapters;
   final bool chaptersInspected;
   final Map<String, List<String>> chapterImages;
+  final Map<String, String> pdfChapters;
   final Map<String, ComicChapter> metadataChapters;
   final List<WebDavLibraryEntry> rootImages;
   final int? bangumiSubjectId;
@@ -3824,6 +3924,9 @@ class _WebDavComicSnapshot {
               (key, value) => MapEntry(key.toString(), value.toString()),
             )
           : const {},
+      pdfChapters: (json['pdfChapters'] as Map? ?? const {}).map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      ),
       metadataChapters: metadataChapters is Map
           ? metadataChapters.map(
               (key, value) => MapEntry(
@@ -3868,6 +3971,7 @@ class _WebDavComicSnapshot {
     'chapters': chapters,
     'chaptersInspected': chaptersInspected,
     'chapterImages': chapterImages,
+    if (pdfChapters.isNotEmpty) 'pdfChapters': pdfChapters,
     'metadataChapters': metadataChapters.map(
       (key, value) => MapEntry(key, value.toJson()),
     ),
@@ -3890,6 +3994,7 @@ class _WebDavComicSnapshot {
 
   int? get pageCount {
     if (archive != null) return archive!.pageCount;
+    if (pdfChapters.isNotEmpty) return null;
     if (!chaptersInspected) return null;
     return rootImages.length +
         chapterImages.values.fold<int>(

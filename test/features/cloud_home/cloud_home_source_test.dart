@@ -17,6 +17,14 @@ const _account = StorageAccount(
   name: 'Drive',
   authorization: {},
 );
+const _importedLibrary = RemoteLibrary(
+  id: 'imported-library',
+  sourceKey: 'remote_library_imported',
+  accountId: 'drive',
+  directories: ['/Comic/'],
+  name: 'Imported library',
+  autoRefresh: false,
+);
 
 void main() {
   late Directory temporary;
@@ -40,11 +48,34 @@ void main() {
     for (final relation in readCloudHomeSources()) {
       ComicSourceManager().remove(relation.sourceKey);
     }
+    ComicSourceManager().remove(_importedLibrary.sourceKey);
     WebDavLibraryEngines.cancelAll();
     WebDavLibrarySource.resetCacheForTesting();
     accounts.dispose();
     await temporary.delete(recursive: true);
   });
+
+  test(
+    'mounting an imported library retains its explore source without scanning',
+    () async {
+      appdata.settings[remoteLibrariesSetting] = [_importedLibrary.toJson()];
+      final key = await ensureImportedCloudHomeSource(
+        _importedLibrary,
+        accounts: accounts,
+      );
+      expect(key, _importedLibrary.sourceKey);
+      final source = ComicSource.find(key)!;
+      final engine = WebDavLibraryEngines.find(key)!;
+      expect(source.explorePages, isNotEmpty);
+      expect(readCloudHomeSources(), isEmpty);
+      expect(store.calls, isEmpty);
+      await ensureImportedCloudHomeSource(_importedLibrary, accounts: accounts);
+      expect(ComicSource.find(key), same(source));
+      expect(WebDavLibraryEngines.find(key), same(engine));
+      expect(source.explorePages, isNotEmpty);
+      expect(store.calls, isEmpty);
+    },
+  );
 
   test(
     'file sources are stable, retained, and never start recursive indexing',

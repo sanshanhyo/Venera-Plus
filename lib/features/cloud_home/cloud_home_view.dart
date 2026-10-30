@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:venera_plus/features/comic_details/comic_details.dart';
+import 'package:venera_plus/features/comic_storage/comic_storage.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/foundation/context.dart';
 import 'package:venera_plus/foundation/image_provider/cached_image.dart';
@@ -19,10 +20,12 @@ class CloudHomeView extends StatefulWidget {
     super.key,
     required this.controller,
     this.isActive = true,
+    this.onOpenComic,
   });
 
   final CloudHomeController controller;
   final bool isActive;
+  final void Function(CloudHomeItem item, String comicId)? onOpenComic;
 
   @override
   State<CloudHomeView> createState() => _CloudHomeViewState();
@@ -35,6 +38,7 @@ class _CloudHomeViewState extends State<CloudHomeView> {
   int _capacity = 1;
   bool _navigating = false;
   bool _turning = false;
+  int _openRequest = 0;
 
   CloudHomeController get _controller => widget.controller;
   int get _anchor => _anchors[_controller.directory] ?? 0;
@@ -43,6 +47,10 @@ class _CloudHomeViewState extends State<CloudHomeView> {
   void didUpdateWidget(covariant CloudHomeView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!oldWidget.isActive && widget.isActive) _preloadKey = null;
+    if (oldWidget.isActive && !widget.isActive) {
+      _openRequest++;
+      _navigating = false;
+    }
   }
 
   void _schedulePreload(int start, int capacity) {
@@ -119,29 +127,80 @@ class _CloudHomeViewState extends State<CloudHomeView> {
     });
   }
 
-  void _openItem(CloudHomeItem item) {
-    if (_navigating || _turning) return;
-    if (item.kind == CloudHomeItemKind.directory ||
-        item.kind == CloudHomeItemKind.pdfCollection) {
-      unawaited(_openDirectory(item.path));
-    } else if (item.isReadable) {
-      context.to(
-        () => ComicPage(
-          id: item.path,
-          sourceKey: _controller.sourceKey,
-          title: item.name,
-          cover: item.cover,
-        ),
-      );
+  Object get _openingScope => (
+    _controller.mountedLibrary?.id,
+    _controller.mountedLibrary?.accountId,
+    _controller.mount?.directory,
+    _controller.sourceKey,
+    _controller.directory,
+  );
+
+  Future<void> _openItem(CloudHomeItem item) async {
+    if (_navigating || _turning || _controller.isLoading || !widget.isActive) {
+      return;
     }
+    final scope = _openingScope;
+    final request = ++_openRequest;
+    setState(() => _navigating = true);
+    try {
+      final resolved = await _controller.resolveItemForOpen(item);
+      if (!mounted ||
+          !widget.isActive ||
+          request != _openRequest ||
+          resolved == null ||
+          scope != _openingScope) {
+        return;
+      }
+      if (resolved.kind == CloudHomeItemKind.directory) {
+        await _controller.openDirectory(resolved.path);
+      } else if (resolved.isReadable) {
+        _openComic(resolved);
+      }
+    } catch (error) {
+      if (mounted &&
+          widget.isActive &&
+          request == _openRequest &&
+          scope == _openingScope) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted && request == _openRequest) {
+        setState(() => _navigating = false);
+      }
+    }
+  }
+
+  void _openComic(CloudHomeItem item) {
+    final comicId = _controller.comicIdFor(item.path);
+    if (widget.onOpenComic != null) {
+      widget.onOpenComic!(item, comicId);
+      return;
+    }
+    context.to(
+      () => ComicPage(
+        id: comicId,
+        sourceKey: _controller.sourceKey,
+        title: _title(item),
+        cover: item.cover,
+      ),
+    );
   }
 
   Future<void> _setOverride(
     String path,
     CloudHomeDirectoryOverride value,
   ) async {
-    await _controller.setDirectoryOverride(path, value);
-    if (mounted) setState(() => _preloadKey = null);
+    try {
+      await _controller.setDirectoryOverride(path, value);
+      if (mounted) setState(() => _preloadKey = null);
+    } on CloudHomeUnsupportedComicFolder {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CloudHomeUnsupportedComicFolder.message.tl)),
+      );
+    }
   }
 
   Future<void> _showDirectoryOptions(CloudHomeItem item) async {
@@ -181,12 +240,14 @@ class _CloudHomeViewState extends State<CloudHomeView> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([_controller, appdata.settings]),
     builder: (context, _) {
-      final location = _controller.location;
-      final binding = location == null
+      final library = _controller.mountedLibrary;
+      final binding = library == null
           ? null
-          : '${location.accountId}|${location.directory}';
+          : '${library.id}|${library.sourceKey}|${_controller.mount?.directory}';
       if (_bindingKey != binding) {
         _bindingKey = binding;
+        _openRequest++;
+        _navigating = false;
         _anchors.clear();
         _preloadKey = null;
       }
@@ -200,11 +261,11 @@ class _CloudHomeViewState extends State<CloudHomeView> {
           }
         },
         child: VolumePageScope(
-          enabled: volume && location != null,
+          enabled: volume && library != null,
           active: widget.isActive,
           onPrevious: () => _turnPage(reverse ? 1 : -1),
           onNext: () => _turnPage(reverse ? -1 : 1),
-          child: location == null
+          child: library == null
               ? _emptyBinding()
               : LayoutBuilder(
                   builder: (context, constraints) {
@@ -235,13 +296,18 @@ class _CloudHomeViewState extends State<CloudHomeView> {
         children: [
           const Icon(Icons.cloud_outlined, size: 52),
           const SizedBox(height: 16),
-          Text('No cloud folder bound'.tl, textAlign: TextAlign.center),
+          Text(
+            _controller.mount == null
+                ? 'No comic library mounted on Home'.tl
+                : 'Mounted comic library is unavailable'.tl,
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: () =>
                 showCloudHomeSettings(context, controller: _controller),
             icon: const Icon(Icons.folder_open_outlined),
-            label: Text('Select a cloud folder'.tl),
+            label: Text('Choose an imported comic library'.tl),
           ),
         ],
       ),
@@ -267,7 +333,9 @@ class _CloudHomeViewState extends State<CloudHomeView> {
             child: Tooltip(
               message: _controller.directory,
               child: Text(
-                _controller.directory,
+                _controller.isVirtualLibraryRoot
+                    ? _controller.mountedLibrary!.name
+                    : _controller.directory,
                 maxLines: compact ? 1 : 2,
                 overflow: TextOverflow.ellipsis,
                 textDirection: TextDirection.ltr,
@@ -305,6 +373,28 @@ class _CloudHomeViewState extends State<CloudHomeView> {
               icon: const Icon(Icons.chevron_right),
             ),
           ],
+          if (!compact)
+            PopupMenuButton<String>(
+              tooltip: 'Home page'.tl,
+              onSelected: (value) async {
+                if (value == 'current') {
+                  await _controller.setCurrentDirectoryAsHome();
+                } else {
+                  await _controller.bindLibrary(_controller.mountedLibrary!.id);
+                }
+              },
+              itemBuilder: (_) => [
+                if (!_controller.isVirtualLibraryRoot)
+                  PopupMenuItem(
+                    value: 'current',
+                    child: Text('Use current folder as Home'.tl),
+                  ),
+                PopupMenuItem(
+                  value: 'library',
+                  child: Text('Comic library home'.tl),
+                ),
+              ],
+            ),
           IconButton(
             tooltip: compact && _controller.error != null
                 ? _controller.error!
@@ -363,30 +453,53 @@ class _CloudHomeViewState extends State<CloudHomeView> {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
-        final width = math.max(1.0, constraints.maxWidth - 24);
+        final scale = MediaQuery.textScalerOf(context).scale(15) / 15;
+        const horizontalPadding = 16.0;
+        const columnSpacing = 12.0;
+        const rowSpacing = 20.0;
+        final width = math.max(
+          1.0,
+          constraints.maxWidth - horizontalPadding * 2,
+        );
+        final minimumWidth = 120 * math.max(1.0, scale * .7);
         final columns = math.max(
           1,
-          (width / (300 * math.max(1.0, scale))).floor(),
+          ((width + columnSpacing) / (minimumWidth + columnSpacing)).floor(),
         );
-        final footerHeight = compact ? 0.0 : 52 + 20 * math.max(0.0, scale - 1);
-        final bottomPadding = math.max(
-          8.0,
-          MediaQuery.paddingOf(context).bottom,
+        final itemWidth = math.max(
+          1.0,
+          (width - columnSpacing * (columns - 1)) / columns,
         );
+        final footerHeight = compact
+            ? 0.0
+            : 40.0 + 12 * math.max(0.0, scale - 1);
+        final safeBottom = math.max(8.0, MediaQuery.paddingOf(context).bottom);
         final available = math.max(
           1.0,
-          constraints.maxHeight -
-              (compact ? bottomPadding : footerHeight - 8 + bottomPadding) -
-              16,
+          constraints.maxHeight - footerHeight - safeBottom - 16,
         );
-        final minHeight = 104 + 44 * math.max(0.0, scale - 1);
-        final rows = math.max(1, ((available + 8) / (minHeight + 8)).floor());
+        final titleHeight = 15 * scale * 1.3 * (compact ? 1 : 2);
+        final typeHeight = 12 * scale * 1.25;
+        final naturalHeight =
+            itemWidth * 4 / 3 + 7 + titleHeight + 4 + typeHeight;
+        var rows = math.max(
+          1,
+          ((available + rowSpacing) / (naturalHeight + rowSpacing)).floor(),
+        );
+        // A small cover reduction avoids losing a whole row at a boundary.
+        // Text retains its system scale and covers retain their 3:4 ratio.
+        final extraRowHeight = (available - rowSpacing * rows) / (rows + 1);
+        final textExtent = 7 + titleHeight + 4 + typeHeight;
+        if (extraRowHeight - textExtent >= itemWidth * 4 / 3 * .85) {
+          rows++;
+        }
+        final itemHeight = math.min(
+          naturalHeight,
+          math.max(1.0, (available - rowSpacing * (rows - 1)) / rows),
+        );
         final capacity = rows * columns;
         if (_capacity != capacity) {
           _capacity = capacity;
-          // The compact pager is above this LayoutBuilder. Refresh its count
-          // once the newly available grid dimensions have been measured.
           if (compact) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) setState(() {});
@@ -403,10 +516,10 @@ class _CloudHomeViewState extends State<CloudHomeView> {
             Expanded(
               child: Padding(
                 padding: EdgeInsets.fromLTRB(
-                  12,
+                  horizontalPadding,
                   8,
-                  12,
-                  compact ? 8 + bottomPadding : 8,
+                  horizontalPadding,
+                  compact ? 8 + safeBottom : 8,
                 ),
                 child: GridView.builder(
                   key: const Key('cloud-home-page-grid'),
@@ -415,40 +528,32 @@ class _CloudHomeViewState extends State<CloudHomeView> {
                   physics: const NeverScrollableScrollPhysics(),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: columns,
-                    mainAxisExtent: math.max(
-                      1.0,
-                      (available - 8 * (rows - 1)) / rows,
-                    ),
-                    crossAxisSpacing: 8,
-                    mainAxisSpacing: 8,
+                    mainAxisExtent: itemHeight,
+                    crossAxisSpacing: columnSpacing,
+                    mainAxisSpacing: rowSpacing,
                   ),
                   itemCount: visible.length,
-                  itemBuilder: (context, index) => _entry(visible[index]),
+                  itemBuilder: (context, index) =>
+                      _entry(visible[index], compact: compact),
                 ),
               ),
             ),
             if (!compact)
               SafeArea(
                 top: false,
-                minimum: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                minimum: const EdgeInsets.only(bottom: 8),
                 child: SizedBox(
-                  height: footerHeight - 8,
+                  height: footerHeight,
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          key: const Key('cloud-home-previous'),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(48, 44),
-                          ),
-                          onPressed: page == 0 || _turning || _navigating
-                              ? null
-                              : () => _turnPage(-1),
-                          child: Semantics(
-                            label: 'Previous page'.tl,
-                            child: const Icon(Icons.chevron_left),
-                          ),
-                        ),
+                      IconButton(
+                        key: const Key('cloud-home-previous'),
+                        tooltip: 'Previous page'.tl,
+                        onPressed: page == 0 || _turning || _navigating
+                            ? null
+                            : () => _turnPage(-1),
+                        icon: const Icon(Icons.chevron_left),
                       ),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -460,24 +565,17 @@ class _CloudHomeViewState extends State<CloudHomeView> {
                               'pages': pages,
                             }),
                             key: const Key('cloud-home-page-number'),
+                            style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ),
                       ),
-                      Expanded(
-                        child: OutlinedButton(
-                          key: const Key('cloud-home-next'),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(48, 44),
-                          ),
-                          onPressed:
-                              page + 1 >= pages || _turning || _navigating
-                              ? null
-                              : () => _turnPage(1),
-                          child: Semantics(
-                            label: 'Next page'.tl,
-                            child: const Icon(Icons.chevron_right),
-                          ),
-                        ),
+                      IconButton(
+                        key: const Key('cloud-home-next'),
+                        tooltip: 'Next page'.tl,
+                        onPressed: page + 1 >= pages || _turning || _navigating
+                            ? null
+                            : () => _turnPage(1),
+                        icon: const Icon(Icons.chevron_right),
                       ),
                     ],
                   ),
@@ -489,128 +587,118 @@ class _CloudHomeViewState extends State<CloudHomeView> {
     );
   }
 
-  Widget _entry(CloudHomeItem item) {
-    final isDirectory = item.isDirectory;
-    final readable = item.isReadable || isDirectory;
+  String _title(CloudHomeItem item) =>
+      item.isDirectory ? item.name : comicFileStem(item.name);
+
+  String _fileType(CloudHomeItem item) => switch (item.kind) {
+    CloudHomeItemKind.directory => 'Folder'.tl,
+    CloudHomeItemKind.pdfCollection => 'PDF',
+    CloudHomeItemKind.imageComic => 'Images'.tl,
+    _ =>
+      item.name.contains('.')
+          ? item.name.split('.').last.toUpperCase()
+          : 'File'.tl,
+  };
+
+  Widget _entry(CloudHomeItem item, {required bool compact}) {
+    final canOpen = item.isReadable || item.kind == CloudHomeItemKind.directory;
     final icon = switch (item.kind) {
       CloudHomeItemKind.directory => Icons.folder_outlined,
-      CloudHomeItemKind.pdfCollection => Icons.library_books_outlined,
       CloudHomeItemKind.imageComic => Icons.photo_library_outlined,
-      CloudHomeItemKind.comicFile => Icons.menu_book_outlined,
       CloudHomeItemKind.unsupported => Icons.insert_drive_file_outlined,
+      _ => Icons.menu_book_outlined,
     };
-    final label = switch (item.kind) {
-      CloudHomeItemKind.directory => 'Folder'.tl,
-      CloudHomeItemKind.pdfCollection => 'PDF collection'.tl,
-      CloudHomeItemKind.imageComic => 'Image comic'.tl,
-      CloudHomeItemKind.comicFile => 'Comic file'.tl,
-      CloudHomeItemKind.unsupported => 'Unsupported file'.tl,
-    };
-    final subtitle = item.fileCount == null
-        ? label
-        : '$label · ${'@count files'.tlParams({'count': item.fileCount!})}';
+    final type = _fileType(item);
     return Semantics(
-      label: '${item.name}, $subtitle',
-      button: readable,
-      enabled: readable,
+      label: '${_title(item)}, $type',
+      button: canOpen,
+      enabled: canOpen,
       child: Material(
         key: ValueKey('cloud-entry-${item.path}'),
-        color: Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-        ),
-        clipBehavior: Clip.antiAlias,
+        color: Colors.transparent,
         child: InkWell(
-          onTap: readable ? () => _openItem(item) : null,
-          onLongPress: isDirectory ? () => _showDirectoryOptions(item) : null,
+          onTap: canOpen ? () => _openItem(item) : null,
+          onLongPress: item.isDirectory
+              ? () => _showDirectoryOptions(item)
+              : null,
           child: LayoutBuilder(
             builder: (context, constraints) {
               final scaler = MediaQuery.textScalerOf(context);
-              final titleStyle = Theme.of(context).textTheme.titleSmall;
-              final labelStyle = Theme.of(context).textTheme.labelSmall;
-              final titleHeight =
-                  scaler.scale(titleStyle?.fontSize ?? 14) * 1.6;
-              final labelHeight =
-                  scaler.scale(labelStyle?.fontSize ?? 11) * 1.6;
-              final verticalPadding = constraints.maxHeight < titleHeight + 24
-                  ? 0.0
-                  : 8.0;
-              final height = math.max(
-                0.0,
-                constraints.maxHeight - 2 * verticalPadding,
+              final titleLine = scaler.scale(15) * 1.3;
+              final typeHeight = scaler.scale(12) * 1.25;
+              var titleLines = compact ? 1 : 2;
+              if (constraints.maxHeight <
+                  titleLine * titleLines + typeHeight + 4) {
+                titleLines = 1;
+              }
+              final showType =
+                  constraints.maxHeight >=
+                  titleLine * titleLines + typeHeight + 4;
+              final textHeight =
+                  titleLine * titleLines + (showType ? typeHeight + 4 : 0);
+              final coverHeight = math.min(
+                constraints.maxWidth * 4 / 3,
+                math.max(0.0, constraints.maxHeight - textHeight - 7),
               );
-              final showSubtitle = height >= titleHeight + labelHeight + 4;
-              final titleLines =
-                  height >=
-                      titleHeight * 2 + (showSubtitle ? labelHeight + 4 : 0)
-                  ? 2
-                  : 1;
-              final showCover = height >= 66;
-              return Padding(
-                padding: EdgeInsets.fromLTRB(
-                  12,
-                  verticalPadding,
-                  4,
-                  verticalPadding,
-                ),
-                child: Row(
-                  children: [
-                    if (showCover)
-                      SizedBox(
-                        width: 44,
-                        height: 66,
+              final showCover = coverHeight >= 28;
+              final coverWidth = coverHeight * 3 / 4;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showCover) ...[
+                    SizedBox(
+                      key: ValueKey('cloud-cover-${item.path}'),
+                      width: coverWidth,
+                      height: coverHeight,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
                         child: item.cover == null
-                            ? Icon(icon, size: 36)
+                            ? _coverPlaceholder(icon)
                             : Image(
                                 image: CachedImageProvider(
                                   item.cover!,
                                   sourceKey: _controller.sourceKey,
-                                  cid: item.path,
+                                  cid: _controller.comicIdFor(item.path),
                                 ),
-                                fit: BoxFit.contain,
-                                errorBuilder: (context, error, stackTrace) =>
-                                    Icon(icon, size: 36),
+                                fit: BoxFit.cover,
+                                alignment: Alignment.topCenter,
+                                errorBuilder: (_, error, stackTrace) =>
+                                    _coverPlaceholder(icon),
                               ),
-                      ),
-                    if (showCover) const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              item.name,
-                              maxLines: titleLines,
-                              overflow: TextOverflow.ellipsis,
-                              style: titleStyle,
-                            ),
-                          ),
-                          if (showSubtitle) ...[
-                            const SizedBox(height: 4),
-                            Flexible(
-                              child: Text(
-                                subtitle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: labelStyle,
-                              ),
-                            ),
-                          ],
-                        ],
                       ),
                     ),
-                    if (isDirectory && height >= 48)
-                      IconButton(
-                        tooltip: 'Recognition options'.tl,
-                        icon: const Icon(Icons.more_vert),
-                        onPressed: () => _showDirectoryOptions(item),
-                      )
-                    else
-                      const SizedBox(width: 8),
+                    const SizedBox(height: 7),
                   ],
-                ),
+                  Flexible(
+                    child: Text(
+                      _title(item),
+                      key: ValueKey('cloud-title-${item.path}'),
+                      maxLines: titleLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                  if (showType) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      type,
+                      key: ValueKey('cloud-type-${item.path}'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontSize: 12,
+                        height: 1.25,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurfaceVariant.withValues(alpha: .7),
+                      ),
+                    ),
+                  ],
+                ],
               );
             },
           ),
@@ -618,4 +706,15 @@ class _CloudHomeViewState extends State<CloudHomeView> {
       ),
     );
   }
+
+  Widget _coverPlaceholder(IconData icon) => ColoredBox(
+    color: Theme.of(context).colorScheme.surfaceContainerLow,
+    child: Center(
+      child: Icon(
+        icon,
+        size: 32,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
 }

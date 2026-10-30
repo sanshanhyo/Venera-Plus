@@ -6,8 +6,64 @@ import 'package:venera_plus/features/webdav_library/webdav_library.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/network/remote_storage/remote_storage.dart';
 
+import 'cloud_home_models.dart';
+
 const homeRemoteLocationSetting = 'homeRemoteLocation';
 const homeRemoteSourcesSetting = 'homeRemoteSources';
+const homeRemoteLibraryMountSetting = 'homeRemoteLibraryMount';
+
+CloudHomeLibraryMount? readCloudHomeMount() {
+  final value = appdata.settings[homeRemoteLibraryMountSetting];
+  if (value is! Map) return null;
+  try {
+    final mount = CloudHomeLibraryMount.fromJson(value);
+    return mount.libraryId.isEmpty ? null : mount;
+  } catch (_) {
+    return null;
+  }
+}
+
+bool isDirectoryInCloudHomeLibrary(RemoteLibrary library, String directory) {
+  final normalized = normalizeRemoteDirectory(directory);
+  return library.directories.any((root) {
+    root = normalizeRemoteDirectory(root);
+    return normalized == root || normalized.startsWith(root);
+  });
+}
+
+/// Reuses the library's normal reader/explore source. Mounting home never
+/// creates a second library, replaces its explore page with a hidden source,
+/// or invokes the recursive comic index.
+Future<String> ensureImportedCloudHomeSource(
+  RemoteLibrary library, {
+  RemoteStorageAccounts? accounts,
+}) async {
+  final storage = accounts ?? RemoteStorageAccounts.instance;
+  final account = storage.account(library.accountId);
+  if (account == null) throw StateError('Cloud storage account is unavailable');
+  final current = WebDavLibraryEngines.find(library.sourceKey);
+  final manager = ComicSourceManager();
+  final previous = manager.find(library.sourceKey);
+  if (current != null &&
+      current.matches(library, account) &&
+      previous != null) {
+    return library.sourceKey;
+  }
+  final engine = current != null && current.matches(library, account)
+      ? current
+      : WebDavLibraryEngine(
+          library: library,
+          store: storage.storeFor(library.accountId),
+        );
+  WebDavLibraryEngines.replace(engine);
+  final source = engine.create();
+  if (previous != null) {
+    source.shareSessionWith(previous);
+    manager.remove(library.sourceKey);
+  }
+  manager.add(source);
+  return library.sourceKey;
+}
 
 RemoteLocation? readCloudHomeLocation() {
   final value = appdata.settings[homeRemoteLocationSetting];

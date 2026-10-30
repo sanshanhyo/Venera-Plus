@@ -184,8 +184,8 @@ class _StorageAndSyncSettingsState extends State<StorageAndSyncSettings> {
             _group([
               ListTile(
                 key: const Key('cloud-home-entry'),
-                title: Text('Cloud Home Folder'.tl),
-                subtitle: Text(_locationSummary('homeRemoteLocation')),
+                title: Text('Home Comic Library'.tl),
+                subtitle: Text(cloudHomeLibrarySummary()),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => showCloudHomeSettings(context),
               ),
