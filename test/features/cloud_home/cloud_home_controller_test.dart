@@ -322,6 +322,8 @@ void main() {
     'overlapping prefetches share requests and respect two directory slots',
     () async {
       final gates = <String, Completer<List<RemoteEntry>>>{};
+      final firstTwoStarted = Completer<void>();
+      final allStarted = Completer<void>();
       final store =
           _Store({
               '/Comic/': [
@@ -330,16 +332,23 @@ void main() {
             })
             ..onList = (path) async {
               if (path == '/Comic/') return null;
-              return (gates[path] ??= Completer<List<RemoteEntry>>()).future;
+              final gate = gates[path] ??= Completer<List<RemoteEntry>>();
+              if (gates.length == 2 && !firstTwoStarted.isCompleted) {
+                firstTwoStarted.complete();
+              }
+              if (gates.length == 4 && !allStarted.isCompleted) {
+                allStarted.complete();
+              }
+              return gate.future;
             };
       final controller = create(store);
       await controller.initialize();
       final preload = controller.preload(start: 0, count: 4);
       final duplicate = controller.preload(start: 0, count: 4);
-      await _until(() => gates.length == 2);
+      await firstTwoStarted.future;
       expect(store.maxActive, lessThanOrEqualTo(2));
       gates.values.toList().forEach((gate) => gate.complete([]));
-      await _until(() => gates.length == 4);
+      await allStarted.future;
       for (final gate in gates.values.where((gate) => !gate.isCompleted)) {
         gate.complete([]);
       }
@@ -446,7 +455,8 @@ void main() {
     await controller.initialize();
     appdata.settings[homeRemoteLibraryMountSetting] =
         const CloudHomeLibraryMount(libraryId: 'other-library').toJson();
-    await _until(
+    await _untilController(
+      controller,
       () => controller.directory == '/Other/' && !controller.isLoading,
     );
     expect(controller.items.single.name, 'new.pdf');
@@ -812,7 +822,8 @@ void main() {
       appdata.settings[remoteLibrariesSetting] = [
         _library.copyWith(name: 'Renamed').toJson(),
       ];
-      await _until(
+      await _untilController(
+        controller,
         () =>
             controller.mountedLibrary?.name == 'Renamed' &&
             !controller.isLoading,
@@ -821,12 +832,16 @@ void main() {
       appdata.settings[remoteLibrariesSetting] = [
         _library.copyWith(directories: ['/Other/']).toJson(),
       ];
-      await _until(
+      await _untilController(
+        controller,
         () => controller.directory == '/Other/' && !controller.isLoading,
       );
       expect(controller.mount!.directory, isNull);
       appdata.settings[remoteLibrariesSetting] = [];
-      await _until(() => controller.mountedLibrary == null);
+      await _untilController(
+        controller,
+        () => controller.mountedLibrary == null,
+      );
       expect(controller.location, isNull);
       expect(controller.items, isEmpty);
       expect(controller.error, contains('unavailable'));
@@ -834,12 +849,22 @@ void main() {
   );
 }
 
-Future<void> _until(bool Function() ready) async {
-  for (var i = 0; i < 100; i++) {
-    if (ready()) return;
-    await Future<void>.delayed(Duration.zero);
+Future<void> _untilController(
+  CloudHomeController controller,
+  bool Function() ready,
+) {
+  final completed = Completer<void>();
+  void changed() {
+    if (!completed.isCompleted && ready()) completed.complete();
   }
-  fail('Asynchronous operation did not complete');
+
+  // The controller publishes completion after its real cache/network I/O.
+  // A fixed number of zero-duration turns can expire before that I/O returns.
+  controller.addListener(changed);
+  changed();
+  return completed.future.whenComplete(
+    () => controller.removeListener(changed),
+  );
 }
 
 class _Store implements RemoteFileStore {
