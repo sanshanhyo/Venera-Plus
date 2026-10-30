@@ -293,7 +293,9 @@ class _MetadataPanelState extends State<MetadataPanel> {
               key: const Key('metadata-jm-settings'),
               tilePadding: EdgeInsets.zero,
               title: Text('JM connection settings'.tl),
-              childrenPadding: const EdgeInsets.only(bottom: 12),
+              // Outlined fields paint their floating labels above their box.
+              // Keep that paint inside ExpansionTile's animated body clip.
+              childrenPadding: const EdgeInsets.only(top: 12, bottom: 12),
               children: [
                 TextField(
                   key: const Key('metadata-jm-base-url'),

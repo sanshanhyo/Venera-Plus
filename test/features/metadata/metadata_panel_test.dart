@@ -150,6 +150,27 @@ void main() {
     expect(service.providers, [MetadataProviderId.jmcomic]);
   });
 
+  testWidgets('expanded JM settings keep the floating label inside the clip', (
+    tester,
+  ) async {
+    final service = _Service()..binding = _binding();
+    await _pumpPanel(tester, service);
+    await _tap(tester, 'metadata-jm-settings');
+
+    final settings = find.byKey(const Key('metadata-jm-settings'));
+    final label = tester.renderObject<RenderBox>(find.text('Website address'));
+    final clip = tester.renderObject<RenderBox>(
+      find.descendant(of: settings, matching: find.byType(ClipRect)),
+    );
+    final labelBounds = MatrixUtils.transformRect(
+      label.getTransformTo(clip),
+      label.paintBounds,
+    );
+    expect(labelBounds.top, greaterThanOrEqualTo(clip.paintBounds.top));
+    expect(labelBounds.bottom, lessThanOrEqualTo(clip.paintBounds.bottom));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('fetch error stays visible without a savable result', (
     tester,
   ) async {

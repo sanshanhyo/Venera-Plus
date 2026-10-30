@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:venera_plus/app_runtime/init.dart';
@@ -63,7 +64,30 @@ void main() {
         const Duration(seconds: 15),
       );
 
+      Future<void> dismissKeyboard() async {
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pump();
+        // Integration tests use Android's real IME. Unfocus/pumpAndSettle
+        // alone can finish before its asynchronous viewport resize arrives.
+        await SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
+        var zeroInsetFrames = 0;
+        for (var attempt = 0; attempt < 60; attempt++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          final insets = tester.view.viewInsets;
+          zeroInsetFrames = insets.bottom == 0 ? zeroInsetFrames + 1 : 0;
+          if (zeroInsetFrames >= 3) {
+            await settle();
+            return;
+          }
+        }
+        fail('Android keyboard did not restore the full screenshot viewport.');
+      }
+
       Future<void> capture(String name, {bool checkErrors = true}) async {
+        if (checkErrors) {
+          await dismissKeyboard();
+          await settle();
+        }
         await tester.pump(const Duration(milliseconds: 250));
         if (checkErrors) expect(tester.takeException(), isNull);
         final boundary = repaintKey.currentContext?.findRenderObject();
@@ -84,10 +108,23 @@ void main() {
       }
 
       Future<void> tapKey(String name) async {
+        await dismissKeyboard();
         final finder = find.byKey(Key(name));
         await tester.ensureVisible(finder);
         await tester.tap(finder);
         await settle();
+      }
+
+      void expectFullyVisibleInPanel(Finder target) {
+        final viewport = tester.getRect(
+          find.descendant(
+            of: find.byType(MetadataPanel),
+            matching: find.byType(SingleChildScrollView),
+          ),
+        );
+        final bounds = tester.getRect(target);
+        expect(bounds.top, greaterThanOrEqualTo(viewport.top));
+        expect(bounds.bottom, lessThanOrEqualTo(viewport.bottom));
       }
 
       Future<void> clearSelection() async {
@@ -311,12 +348,19 @@ void main() {
           find.byKey(const Key('metadata-jm-cover-base-url')),
           smokeJmCoverBaseUrl,
         );
-        FocusManager.instance.primaryFocus?.unfocus();
+        await dismissKeyboard();
+        final settingsScroll = Scrollable.of(
+          tester.element(find.byKey(const Key('metadata-jm-base-url'))),
+        ).position;
+        settingsScroll.jumpTo(settingsScroll.minScrollExtent);
         await settle();
-        await tester.ensureVisible(
+        expectFullyVisibleInPanel(
           find.byKey(const Key('metadata-jm-base-url')),
         );
-        await settle();
+        expectFullyVisibleInPanel(
+          find.byKey(const Key('metadata-jm-cover-base-url')),
+        );
+        expectFullyVisibleInPanel(find.byKey(const Key('metadata-reference')));
         await capture('05_jm_settings');
         final referenceInput = find.byKey(const Key('metadata-reference'));
         await tester.ensureVisible(referenceInput);
@@ -326,10 +370,6 @@ void main() {
         expect(service.jmBaseUrl, smokeJmBaseUrl);
         expect(service.jmCoverBaseUrl, smokeJmCoverBaseUrl);
         await tapKey('metadata-jm-settings');
-        await tester.ensureVisible(
-          find.byKey(const Key('metadata-cache-cover')),
-        );
-        await settle();
         if (tester
             .widget<SwitchListTile>(
               find.byKey(const Key('metadata-cache-cover')),
@@ -337,6 +377,19 @@ void main() {
             .value) {
           await tapKey('metadata-cache-cover');
         }
+        // Frame the full preview cover from its heading; the subsequent save
+        // action scrolls separately if the controls are below a short viewport.
+        await tester.ensureVisible(find.text('Preview'.tl));
+        await settle();
+        expectFullyVisibleInPanel(
+          find.descendant(
+            of: find.byType(MetadataPanel),
+            matching: find.byType(Image),
+          ),
+        );
+        expectFullyVisibleInPanel(
+          find.byKey(const Key('metadata-cache-cover')),
+        );
         await capture('06_jm_preview_cache_off');
 
         currentScene = 'jm-save-without-cover-cache';

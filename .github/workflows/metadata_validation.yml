@@ -137,17 +137,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: |
-            mkdir -p build/metadata-smoke-artifacts
-            set +e
-            flutter drive --driver=test/driver/metadata_smoke_driver.dart --target=test/integration/metadata_smoke.dart -d emulator-5554 --dart-define=CI_NATIVE_SMOKE=true
-            smoke_result=$?
-            adb -s emulator-5554 exec-out screencap -p > build/metadata-smoke-artifacts/device-final.png
-            adb -s emulator-5554 logcat -d -t 1200 > build/metadata-smoke-artifacts/android-logcat.txt
-            if [ "$smoke_result" -ne 0 ]; then
-              exit "$smoke_result"
-            fi
-            test -s build/metadata-smoke-artifacts/manifest.json
+          script: bash .github/scripts/run_metadata_smoke.sh
       - name: 校验依赖锁文件未变更
         run: git diff --exit-code -- pubspec.lock
       - name: sccache 统计
