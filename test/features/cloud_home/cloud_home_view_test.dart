@@ -1,6 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -494,11 +494,13 @@ void main() {
         'cloud-bookshelf-preview-',
       );
       addTearDown(() async => scratch.delete(recursive: true));
-      late List<String> covers;
-      await tester.runAsync(() async {
+      final covers = await tester.runAsync(() async {
         await _loadPreviewFont();
-        covers = await _writeSyntheticCovers(scratch);
+        return _writeSyntheticCovers(scratch);
       });
+      if (covers == null) {
+        throw StateError('CI synthetic cover generation did not complete');
+      }
       final controller = _BrowserController()
         ..customItems = [
           for (var i = 0; i < 24; i++)
@@ -646,26 +648,44 @@ const _previewTitles = [
 ];
 
 Future<void> _loadPreviewFont() async {
-  final framework = await Isolate.resolvePackageUri(
-    Uri.parse('package:flutter/widgets.dart'),
-  );
-  final flutterRoots = {
-    if (Platform.environment['FLUTTER_ROOT'] case final String path) path,
-    if (framework != null)
-      File.fromUri(framework).parent.parent.parent.parent.path,
+  final flutterRoots = <String>{
+    if (Platform.environment['FLUTTER_ROOT'] case final String path)
+      if (path.isNotEmpty) path,
   };
+  // flutter_tester does not support Isolate.resolvePackageUri. Pub's generated
+  // package configuration identifies the SDK without an isolate runtime API.
+  final packageConfig = File('.dart_tool/package_config.json');
+  if (packageConfig.existsSync()) {
+    final configuration = jsonDecode(await packageConfig.readAsString());
+    if (configuration is Map && configuration['packages'] is List) {
+      for (final package
+          in (configuration['packages'] as List).whereType<Map>()) {
+        if (package['name'] != 'flutter' || package['rootUri'] is! String) {
+          continue;
+        }
+        final packageRoot = packageConfig.absolute.uri.resolve(
+          package['rootUri'] as String,
+        );
+        if (packageRoot.scheme == 'file') {
+          flutterRoots.add(Directory.fromUri(packageRoot).parent.parent.path);
+        }
+        break;
+      }
+    }
+  }
   final candidates = [
-    for (final flutter in flutterRoots) ...[
+    for (final flutter in flutterRoots)
       '$flutter/bin/cache/artifacts/material_fonts/Roboto-Regular.ttf',
-      '$flutter/engine/src/flutter/txt/third_party/fonts/Roboto-Regular.ttf',
-    ],
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
   ];
   final file = candidates
       .map(File.new)
       .where((file) => file.existsSync())
       .firstOrNull;
-  if (file == null) throw StateError('No CI preview typeface is available');
+  if (file == null) {
+    throw StateError(
+      'CI Roboto font was not found at: ${candidates.join(', ')}',
+    );
+  }
   final loader = FontLoader('BookshelfPreview')
     ..addFont(Future.value(ByteData.sublistView(await file.readAsBytes())));
   await loader.load();
@@ -678,7 +698,9 @@ Future<void> _loadPreviewFont() async {
       .where((file) => file.existsSync())
       .firstOrNull;
   if (iconFont == null) {
-    throw StateError('No CI MaterialIcons typeface is available');
+    throw StateError(
+      'CI MaterialIcons font was not found under SDK roots: ${flutterRoots.join(', ')}',
+    );
   }
   final icons = FontLoader('MaterialIcons')
     ..addFont(Future.value(ByteData.sublistView(await iconFont.readAsBytes())));
