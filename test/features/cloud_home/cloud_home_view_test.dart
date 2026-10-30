@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -33,10 +34,8 @@ void main() {
     await _show(tester, controller);
     final grid = tester.widget<GridView>(find.byType(GridView));
     expect(grid.physics, isA<NeverScrollableScrollPhysics>());
-    final visibleCount =
-        (grid.childrenDelegate as SliverChildBuilderDelegate).childCount!;
-    expect(visibleCount, lessThan(controller.items.length));
-    expect(controller.preloads.last, (start: 0, count: visibleCount * 2));
+    expect((grid.childrenDelegate as SliverChildBuilderDelegate).childCount, 6);
+    expect(controller.preloads.last, (start: 0, count: 12));
     expect(
       find.byKey(const ValueKey('cloud-entry-/Comic/Folder0/')),
       findsOneWidget,
@@ -49,7 +48,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.byKey(ValueKey('cloud-entry-/Comic/Folder$visibleCount/')),
+      find.byKey(const ValueKey('cloud-entry-/Comic/Folder6/')),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -59,14 +58,13 @@ void main() {
     final controller = _BrowserController();
     await _show(tester, controller);
     final grid = tester.widget<GridView>(find.byType(GridView));
-    final capacity =
-        (grid.childrenDelegate as SliverChildBuilderDelegate).childCount!;
+    expect((grid.childrenDelegate as SliverChildBuilderDelegate).childCount, 6);
     await tester.tap(find.byKey(const Key('cloud-home-next')));
     await tester.pumpAndSettle();
     final page = tester
         .widget<Text>(find.byKey(const Key('cloud-home-page-number')))
         .data;
-    await tester.tap(find.text('Folder$capacity'));
+    await tester.tap(find.text('Folder6'));
     await tester.pumpAndSettle();
     expect(find.text('original_chapter9'), findsOneWidget);
     expect(find.text('original_chapter8'), findsOneWidget);
@@ -77,7 +75,7 @@ void main() {
       tester.widget<Text>(find.byKey(const Key('cloud-home-page-number'))).data,
       page,
     );
-    expect(find.text('Folder$capacity'), findsOneWidget);
+    expect(find.text('Folder6'), findsOneWidget);
   });
 
   testWidgets('slow preloads do not block paging or folder navigation', (
@@ -100,13 +98,7 @@ void main() {
         .widget<Text>(find.byKey(const Key('cloud-home-page-number')))
         .data!;
     expect(waitingPage.startsWith('2 /'), isTrue);
-    final firstVisible = find
-        .byWidgetPredicate(
-          (widget) =>
-              widget is Text && widget.data?.startsWith('Folder') == true,
-        )
-        .first;
-    await tester.tap(firstVisible);
+    await tester.tap(find.text('Folder6'));
     await tester.pumpAndSettle();
     expect(find.text('original_chapter9'), findsOneWidget);
     gate.complete();
@@ -131,9 +123,30 @@ void main() {
 
   testWidgets('unsupported files do not open the reader', (tester) async {
     final controller = _BrowserController()..current = '/Comic/Folder0/';
-    await _show(tester, controller);
-    await tester.tap(find.text('notes'));
+    var openedComic = false;
+    await _show(tester, controller, onOpenComic: (_, id) => openedComic = true);
+    final entry = find.byKey(
+      const ValueKey('cloud-entry-/Comic/Folder0/notes.txt'),
+    );
+    // Screen capacity changes with the cover layout. Reach the file through
+    // the pager rather than assuming the third item fits on the first screen.
+    for (var page = 0; page < controller.items.length; page++) {
+      if (entry.evaluate().isNotEmpty) break;
+      final next = find.byKey(const Key('cloud-home-next'));
+      expect(tester.widget<IconButton>(next).onPressed, isNotNull);
+      await tester.tap(next);
+      await tester.pumpAndSettle();
+    }
+    expect(entry, findsOneWidget);
+    final tapTarget = find.descendant(
+      of: entry,
+      matching: find.byType(InkWell),
+    );
+    expect(tester.widget<InkWell>(tapTarget).onTap, isNull);
+    await tester.tap(entry);
     await tester.pumpAndSettle();
+    expect(openedComic, isFalse);
+    expect(controller.openedDirectories, isEmpty);
     expect(controller.directory, '/Comic/Folder0/');
     expect(find.text('TXT'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -145,13 +158,12 @@ void main() {
     final controller = _BrowserController();
     await _show(tester, controller);
     final grid = tester.widget<GridView>(find.byType(GridView));
-    final capacity =
-        (grid.childrenDelegate as SliverChildBuilderDelegate).childCount!;
+    expect((grid.childrenDelegate as SliverChildBuilderDelegate).childCount, 6);
     await tester.tap(find.byKey(const Key('cloud-home-next')));
     await tester.pumpAndSettle();
     tester.view.physicalSize = const Size(800, 480);
     await tester.pumpAndSettle();
-    expect(find.text('Folder$capacity'), findsOneWidget);
+    expect(find.text('Folder6'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -240,8 +252,12 @@ void main() {
     final grid = tester.widget<GridView>(find.byType(GridView));
     final delegate =
         grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
-    expect(delegate.crossAxisCount, greaterThanOrEqualTo(2));
-    expect(delegate.mainAxisExtent!, lessThan(300));
+    expect(delegate.crossAxisCount, 3);
+    expect(
+      (grid.childrenDelegate as SliverChildBuilderDelegate).childCount,
+      greaterThanOrEqualTo(6),
+    );
+    expect(delegate.mainAxisExtent!, lessThan(230));
     final first = find.byKey(const ValueKey('cloud-entry-/Comic/Folder0/'));
     final card = tester.widget<Material>(first);
     expect(card.color, Colors.transparent);
@@ -574,6 +590,19 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+        if (configuration.scale == 1) {
+          final grid = tester.widget<GridView>(find.byType(GridView));
+          final delegate =
+              grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
+          expect(
+            delegate.crossAxisCount,
+            configuration.size.width == 360 ? 3 : 4,
+          );
+          expect(
+            (grid.childrenDelegate as SliverChildBuilderDelegate).childCount,
+            configuration.size.width == 360 ? 6 : 8,
+          );
+        }
         final boundary =
             boundaryKey.currentContext!.findRenderObject()!
                 as RenderRepaintBoundary;
@@ -586,6 +615,18 @@ void main() {
           ).writeAsBytes(bytes!.buffer.asUint8List());
           image.dispose();
         });
+        if (configuration.size.width == 360 && configuration.scale == 1) {
+          await tester.tap(find.byKey(const Key('cloud-home-next')));
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const ValueKey('cloud-entry-/Comic/Book0/')),
+            findsNothing,
+          );
+          expect(
+            find.byKey(const ValueKey('cloud-entry-/Comic/Book6/')),
+            findsOneWidget,
+          );
+        }
       }
       await tester.pumpWidget(const SizedBox.shrink());
       tester.view.resetPhysicalSize();
@@ -605,12 +646,19 @@ const _previewTitles = [
 ];
 
 Future<void> _loadPreviewFont() async {
-  final flutter = Platform.environment['FLUTTER_ROOT'];
+  final framework = await Isolate.resolvePackageUri(
+    Uri.parse('package:flutter/widgets.dart'),
+  );
+  final flutterRoots = {
+    if (Platform.environment['FLUTTER_ROOT'] case final String path) path,
+    if (framework != null)
+      File.fromUri(framework).parent.parent.parent.parent.path,
+  };
   final candidates = [
-    if (flutter != null)
+    for (final flutter in flutterRoots) ...[
       '$flutter/bin/cache/artifacts/material_fonts/Roboto-Regular.ttf',
-    if (flutter != null)
       '$flutter/engine/src/flutter/txt/third_party/fonts/Roboto-Regular.ttf',
+    ],
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
   ];
   final file = candidates
@@ -621,6 +669,20 @@ Future<void> _loadPreviewFont() async {
   final loader = FontLoader('BookshelfPreview')
     ..addFont(Future.value(ByteData.sublistView(await file.readAsBytes())));
   await loader.load();
+  final iconFont = flutterRoots
+      .map(
+        (flutter) => File(
+          '$flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
+        ),
+      )
+      .where((file) => file.existsSync())
+      .firstOrNull;
+  if (iconFont == null) {
+    throw StateError('No CI MaterialIcons typeface is available');
+  }
+  final icons = FontLoader('MaterialIcons')
+    ..addFont(Future.value(ByteData.sublistView(await iconFont.readAsBytes())));
+  await icons.load();
 }
 
 Future<List<String>> _writeSyntheticCovers(Directory directory) async {

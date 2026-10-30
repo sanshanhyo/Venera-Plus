@@ -462,10 +462,17 @@ class _CloudHomeViewState extends State<CloudHomeView> {
           constraints.maxWidth - horizontalPadding * 2,
         );
         final minimumWidth = 120 * math.max(1.0, scale * .7);
-        final columns = math.max(
+        var columns = math.max(
           1,
           ((width + columnSpacing) / (minimumWidth + columnSpacing)).floor(),
         );
+        // A phone-sized shelf keeps three compact books per row. Larger
+        // accessibility text retains the wider slots it needs for legibility.
+        if (constraints.maxWidth < 420 &&
+            scale <= 1.2 &&
+            width >= 3 * 100 + 2 * columnSpacing) {
+          columns = math.max(columns, 3);
+        }
         final itemWidth = math.max(
           1.0,
           (width - columnSpacing * (columns - 1)) / columns,
