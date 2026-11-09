@@ -117,74 +117,79 @@ void main() {
     group(
       'real scoped metadata refresh',
       () {
-        test(
-          'refresh persists source fields underneath a metadata override',
-          () async {
-            ComicSourceManager().add(
-              _source(
-                sourceKey,
-                loadComicInfo: (id) async {
-                  final raw = ComicDetails.fromJson({
-                    ..._details(sourceKey, id).toJson(),
-                    'subtitle': null,
-                    'chapters': {'one': 'One', 'two': 'Two'},
-                    'chapterPageCounts': {'one': 3, 'two': 4},
-                  });
-                  return Res(MetadataStore.applyAppDetails(raw));
-                },
-              ),
-            );
-            await _withLiveFavorites((manager) async {
-              final item = _tracked(sourceKey, 'overlaid');
-              manager.addComic('在读', item, null, _oldSnapshot);
-              final metadata = MetadataStore.app;
-              metadata.save(
-                MetadataBinding(
-                  sourceKey: sourceKey,
-                  comicId: item.id,
-                  result: MetadataResult(
-                    reference: const MetadataReference(
-                      provider: MetadataProviderId.jmcomic,
-                      id: '123',
-                      sourceUrl: 'https://example.com/album/123',
-                    ),
-                    title: 'Visible title',
-                    authors: const ['Visible author'],
-                    coverUrl: 'https://example.com/visible-cover.jpg',
-                  ),
-                  cacheCover: false,
-                  updatedAt: DateTime.utc(2026, 11, 9),
+        for (final sourceAuthor in <String?>[null, 'Fresh author']) {
+          test(
+            'refresh persists source fields underneath a metadata override (${sourceAuthor ?? 'missing author'})',
+            () async {
+              ComicSourceManager().add(
+                _source(
+                  sourceKey,
+                  loadComicInfo: (id) async {
+                    final raw = ComicDetails.fromJson({
+                      ..._details(sourceKey, id).toJson(),
+                      'subtitle': sourceAuthor,
+                      'subTitle': sourceAuthor,
+                      'chapters': {'one': 'One', 'two': 'Two'},
+                      'chapterPageCounts': {'one': 3, 'two': 4},
+                    });
+                    expect(raw.subTitle, sourceAuthor);
+                    return Res(MetadataStore.applyAppDetails(raw));
+                  },
                 ),
               );
-              final result = await updateComic(
-                manager.getComicWithUpdatesInfo('在读', item.id, item.type),
-                '在读',
-              );
-              expect(result.errorMessage, isNull);
-              var refreshed = manager.getComicWithUpdatesInfo(
-                '在读',
-                item.id,
-                item.type,
-              );
-              expect(refreshed.title, 'Visible title');
-              expect(refreshed.storedName, 'Fresh title');
-              expect(refreshed.storedAuthor, 'Old author');
-              expect(refreshed.storedCoverPath, 'fresh.jpg');
-              expect(refreshed.storedTags, ['genre:fresh']);
-              expect(refreshed.updateTime, _newTime);
-              expect(refreshed.lastCheckTime, isNotNull);
-              metadata.remove(sourceKey, item.id);
-              refreshed = manager.getComicWithUpdatesInfo(
-                '在读',
-                item.id,
-                item.type,
-              );
-              expect(refreshed.title, 'Fresh title');
-              expect(refreshed.author, 'Old author');
-              expect(refreshed.cover, 'fresh.jpg');
-            });
-          },
-        );
+              await _withLiveFavorites((manager) async {
+                final item = _tracked(sourceKey, 'overlaid');
+                manager.addComic('在读', item, null, _oldSnapshot);
+                final metadata = MetadataStore.app;
+                metadata.save(
+                  MetadataBinding(
+                    sourceKey: sourceKey,
+                    comicId: item.id,
+                    result: MetadataResult(
+                      reference: const MetadataReference(
+                        provider: MetadataProviderId.jmcomic,
+                        id: '123',
+                        sourceUrl: 'https://example.com/album/123',
+                      ),
+                      title: 'Visible title',
+                      authors: const ['Visible author'],
+                      coverUrl: 'https://example.com/visible-cover.jpg',
+                    ),
+                    cacheCover: false,
+                    updatedAt: DateTime.utc(2026, 11, 9),
+                  ),
+                );
+                final result = await updateComic(
+                  manager.getComicWithUpdatesInfo('在读', item.id, item.type),
+                  '在读',
+                );
+                expect(result.errorMessage, isNull);
+                var refreshed = manager.getComicWithUpdatesInfo(
+                  '在读',
+                  item.id,
+                  item.type,
+                );
+                expect(refreshed.title, 'Visible title');
+                expect(refreshed.author, 'Visible author');
+                expect(refreshed.storedName, 'Fresh title');
+                expect(refreshed.storedAuthor, sourceAuthor ?? 'Old author');
+                expect(refreshed.storedCoverPath, 'fresh.jpg');
+                expect(refreshed.storedTags, ['genre:fresh']);
+                expect(refreshed.updateTime, _newTime);
+                expect(refreshed.lastCheckTime, isNotNull);
+                metadata.remove(sourceKey, item.id);
+                refreshed = manager.getComicWithUpdatesInfo(
+                  '在读',
+                  item.id,
+                  item.type,
+                );
+                expect(refreshed.title, 'Fresh title');
+                expect(refreshed.author, sourceAuthor ?? 'Old author');
+                expect(refreshed.cover, 'fresh.jpg');
+              });
+            },
+          );
+        }
 
         test(
           'overlapping consumers fetch once and apply fresh metadata to all memberships',
