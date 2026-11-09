@@ -1870,6 +1870,13 @@ Future<void> _popReader(
 class _TestFavorites extends ChangeNotifier implements LocalFavoritesManager {
   final replacements = <(String, ComicType, String)>[];
 
+  // This fake emits only persisted-data changes.
+  @override
+  void addDataListener(VoidCallback listener) => addListener(listener);
+
+  @override
+  void removeDataListener(VoidCallback listener) => removeListener(listener);
+
   @override
   void replaceComic(
     String id,

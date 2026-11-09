@@ -835,10 +835,14 @@ void main() {
         ..['missingImages'] = {
           'chapter-1': [1],
         };
-      final persisted = saved['comic'] as Map;
-      expect(persisted['title'], base.title);
-      expect(persisted['cover'], base.cover);
-      final resumed = ImagesDownloadTask.fromJson(saved)!;
+      final persisted = jsonDecode(jsonEncode(saved)) as Map<String, dynamic>;
+      final persistedDetails = persisted['comic'] as Map;
+      expect(persistedDetails['title'], base.title);
+      expect(persistedDetails['cover'], base.cover);
+      final resumed = ImagesDownloadTask.fromJson(persisted)!;
+      expect(resumed.comic!.subTitle, base.subTitle);
+      expect(resumed.comic!.chapterGroups, base.chapterGroups);
+      expect(resumed.comic!.chapterPageCounts, base.chapterPageCounts);
       final local = resumed.toLocalComic();
       expect(local.storedTitle, base.title);
       expect(local.storedSubtitle, base.subTitle);

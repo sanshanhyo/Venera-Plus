@@ -286,7 +286,7 @@ class ComicDetails with HistoryMixin {
 
   ComicDetails.fromJson(Map<String, dynamic> json)
     : title = json["title"],
-      subTitle = json["subtitle"],
+      subTitle = json["subtitle"] ?? json["subTitle"],
       cover = json["cover"],
       description = json["description"],
       tags = _generateMap(json["tags"]),
