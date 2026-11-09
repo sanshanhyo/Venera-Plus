@@ -793,6 +793,36 @@ void main() {
     );
   }
 
+  test(
+    'logical PDF work metadata preserves ranges without inspecting files',
+    () async {
+      const root = '/library/PDF Metadata/';
+      const path = '${root}metadata.json';
+      const chapters = [
+        {'title': 'Stored range', 'start': 1, 'end': 5},
+      ];
+      store.addFile('${root}Beginning.pdf', _createPdfBytes(1));
+      store.addFile('${root}Afterword.pdf', _createPdfBytes(1));
+      store.texts[path] = RemoteTextFile(
+        content: jsonEncode({'title': 'Original title', 'chapters': chapters}),
+        eTag: '"original"',
+      );
+      final info = await source.loadComicInfo!(root);
+      expect(info.success, isTrue, reason: info.errorMessage);
+      expect(info.data.chapters!.titles, ['Afterword', 'Beginning']);
+      expect(info.data.id, root);
+      await engine.writeMetadata(
+        root,
+        const ComicMetaData(title: 'Updated title', author: 'Author', tags: []),
+      );
+      final document = jsonDecode(store.texts[path]!.content) as Map;
+      expect(document['title'], 'Updated title');
+      expect(document['chapters'], chapters);
+      expect(ranges, isEmpty);
+      expect(store.links, 0);
+    },
+  );
+
   test('work metadata updates preserve existing chapter ranges', () async {
     const root = '/library/Metadata Work/';
     const path = '${root}metadata.json';

@@ -10,7 +10,9 @@ import 'package:image/image.dart' as image;
 import 'package:pdfrx/pdfrx.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
+import 'package:venera_plus/features/history/history.dart';
 import 'package:venera_plus/features/webdav_library/remote_archive_comic.dart';
+import 'package:venera_plus/features/webdav_library/remote_pdf_collection.dart';
 import 'package:venera_plus/features/webdav_library/webdav_library.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
@@ -85,6 +87,14 @@ void main() {
     return (config['loadBytes'] as ComicImageBytesLoader)(
       token ?? CancelToken(),
     );
+  }
+
+  ({String path, String? entry}) archiveImage(String key) {
+    final member = key.startsWith(remoteComicWorkImagePrefix)
+        ? RemoteComicWork.parseImageKey(key).image!
+        : key;
+    final decoded = RemoteArchiveComic.parseImageKey(member)!;
+    return (path: decoded.path, entry: decoded.entry);
   }
 
   void expectBoundedRequests() {
@@ -245,6 +255,290 @@ void main() {
   });
 
   test(
+    'a PDF folder indexes once and exposes lazy stable file chapters',
+    () async {
+      store.collectionMode = true;
+      const collection = '/library/Series/';
+      final sync = await engine.synchronize();
+      expect(sync.success, isTrue, reason: sync.errorMessage);
+      final listed = await source.explorePages.single.loadPage!(1);
+      expect(listed.success, isTrue, reason: listed.errorMessage);
+      expect(listed.data.map((comic) => comic.id), [collection]);
+      expect(probe.openCount, 0);
+      expect(ranges, isEmpty);
+
+      final info = await source.loadComicInfo!(collection);
+      expect(info.success, isTrue, reason: info.errorMessage);
+      expect(info.data.title, 'Series');
+      expect(info.data.chapters!.titles, ['chapter2', 'chapter10']);
+      final ids = info.data.chapters!.ids.toList();
+      expect(ids, [
+        remotePdfChapterId('/library/Series/chapter2.pdf'),
+        remotePdfChapterId('/library/Series/chapter10.pdf'),
+      ]);
+      expect(probe.openCount, 0);
+
+      final first = await source.loadComicPages!(collection, ids.first);
+      expect(first.success, isTrue, reason: first.errorMessage);
+      expect(first.data, hasLength(3));
+      expect(probe.openCount, 1);
+      final second = await source.loadComicPages!(collection, ids.last);
+      expect(second.success, isTrue, reason: second.errorMessage);
+      expect(second.data, hasLength(3));
+      expect(probe.openCount, 2);
+      expect(
+        first.data.map((key) => archiveImage(key).path),
+        everyElement('/library/Series/chapter2.pdf'),
+      );
+      expect(
+        second.data.map((key) => archiveImage(key).path),
+        everyElement('/library/Series/chapter10.pdf'),
+      );
+      expect(first.data.first, isNot(second.data.first));
+      expect(second.data.map((key) => archiveImage(key).entry), [
+        'pdf:1',
+        'pdf:2',
+        'pdf:3',
+      ]);
+
+      // The collection treats a PDF as one chapter, while its old standalone
+      // identity and internal bookmark navigation remain valid.
+      final standalone = await source.loadComicInfo!(
+        '/library/Series/chapter2.pdf',
+      );
+      expect(standalone.success, isTrue, reason: standalone.errorMessage);
+      expect(standalone.data.chapters!.titles, ['Opening', 'Finale']);
+      final invalid = await source.loadComicPages!(
+        collection,
+        remotePdfChapterId('/library/Outside.pdf'),
+      );
+      expect(invalid.error, isTrue);
+      expect(store.statPaths, isNot(contains('/library/Outside.pdf')));
+      expect(nonRangeRequests, 0);
+      expect(store.downloads, 0);
+    },
+  );
+
+  test('arbitrary PDF names share one home and index identity', () async {
+    store.collectionMode = true;
+    store.collectionCover = true;
+    store.collectionNames
+      ..clear()
+      ..addAll(['Beginning.pdf', 'Afterword.pdf']);
+    const id = '/library/Series/';
+    final homeId = engine.comicIdForPath(id);
+    final home = await source.loadComicInfo!(homeId);
+    expect(home.success, isTrue, reason: home.errorMessage);
+    expect(home.data.chapters!.titles, ['Afterword', 'Beginning']);
+    expect(home.data.chapters!.ids, [
+      remotePdfChapterId('/library/Series/Afterword.pdf'),
+      remotePdfChapterId('/library/Series/Beginning.pdf'),
+    ]);
+    expect(probe.openCount, 0);
+    expect(ranges, isEmpty);
+    final synced = await engine.synchronize();
+    expect(synced.success, isTrue, reason: synced.errorMessage);
+    final page = await source.explorePages.single.loadPage!(1);
+    expect(page.success, isTrue, reason: page.errorMessage);
+    expect(page.data.map((comic) => comic.id), [homeId]);
+    expect(probe.openCount, 0);
+    expect(ranges, isEmpty);
+  });
+
+  test('native work links and file chapter aliases remain readable', () async {
+    store.collectionMode = true;
+    const directory = '/library/Series/';
+    const path = '${directory}chapter2.pdf';
+    final nativeId = RemoteComicWork(
+      directory: directory,
+      title: '',
+      volumes: [],
+    ).id;
+    final native = await source.loadComicInfo!(nativeId);
+    expect(native.success, isTrue, reason: native.errorMessage);
+    expect(native.data.chapters!.ids, [path, '${directory}chapter10.pdf']);
+    expect(probe.openCount, 0);
+    final nativePages = await source.loadComicPages!(nativeId, path);
+    expect(nativePages.success, isTrue, reason: nativePages.errorMessage);
+    expect(nativePages.data, hasLength(3));
+    expect(
+      nativePages.data.map((key) => archiveImage(key).path),
+      everyElement(path),
+    );
+    final logical = await source.loadComicInfo!(directory);
+    expect(logical.success, isTrue, reason: logical.errorMessage);
+    expect(logical.data.chapters!.ids, [
+      remotePdfChapterId(path),
+      remotePdfChapterId('${directory}chapter10.pdf'),
+    ]);
+    final aliased = await source.loadComicPages!(directory, path);
+    expect(aliased.success, isTrue, reason: aliased.errorMessage);
+    final encoded = await source.loadComicPages!(
+      nativeId,
+      remotePdfChapterId(path),
+    );
+    expect(encoded.success, isTrue, reason: encoded.errorMessage);
+    expect(aliased.data, hasLength(3));
+    expect(encoded.data, hasLength(3));
+    expect(nonRangeRequests, 0);
+    expect(store.downloads, 0);
+  });
+
+  test(
+    'collection details remain available when PDF bytes cannot be opened',
+    () async {
+      store.collectionMode = true;
+      return200 = true;
+      const collection = '/library/Series/';
+      final info = await source.loadComicInfo!(collection);
+      expect(info.success, isTrue, reason: info.errorMessage);
+      expect(info.data.chapters!.length, 2);
+      expect(probe.openCount, 0);
+      expect(ranges, isEmpty);
+      final pages = await source.loadComicPages!(
+        collection,
+        info.data.chapters!.ids.first,
+      );
+      expect(pages.error, isTrue);
+      expect(ranges, isNotEmpty);
+    },
+  );
+
+  test(
+    'collection refresh preserves chapter IDs and rejects removed volumes',
+    () async {
+      store.collectionMode = true;
+      store.collectionCover = true;
+      const collection = '/library/Series/';
+      final before = await source.loadComicInfo!(collection);
+      expect(before.success, isTrue, reason: before.errorMessage);
+      final original = before.data.chapters!.allChapters;
+      final resume = ReadingPosition(
+        ep: 1,
+        page: 2,
+        chapterId: original.keys.first,
+      );
+      expect(before.data.cover, '/library/Series/cover.jpg');
+      expect(probe.openCount, 0);
+      store.collectionNames.insert(0, 'chapter1.pdf');
+      await engine.prepareDirectoryBrowserEntry(
+        const RemoteEntry(name: 'Series', path: collection, isDirectory: true),
+      );
+      final after = await source.loadComicInfo!(collection);
+      expect(after.success, isTrue, reason: after.errorMessage);
+      expect(after.data.chapters!.titles, [
+        'chapter1',
+        'chapter2',
+        'chapter10',
+      ]);
+      for (final chapter in original.entries) {
+        expect(after.data.chapters![chapter.key], chapter.value);
+      }
+      ReadingCatalog catalog(ComicDetails details) => ReadingCatalog([
+        for (final (index, id) in details.chapters!.ids.indexed)
+          ReadingChapter(id: id, ep: index + 1),
+      ]);
+      expect(
+        catalog(after.data).rebasePosition(resume),
+        ReadingPosition(ep: 2, page: 2, chapterId: resume.chapterId),
+      );
+      final saved = after.data.chapters!.allChapters;
+      engine.cancel();
+      engine = createEngine();
+      source = engine.create();
+      final reopened = await source.loadComicInfo!(collection);
+      expect(reopened.success, isTrue, reason: reopened.errorMessage);
+      expect(reopened.data.chapters!.allChapters, saved);
+
+      store.collectionNames.remove('chapter2.pdf');
+      await engine.prepareDirectoryBrowserEntry(
+        const RemoteEntry(name: 'Series', path: collection, isDirectory: true),
+      );
+      final refreshed = await source.loadComicInfo!(collection);
+      expect(refreshed.success, isTrue, reason: refreshed.errorMessage);
+      expect(refreshed.data.chapters!.titles, ['chapter1', 'chapter10']);
+      expect(catalog(refreshed.data).indexOf(resume), isNull);
+      final missing = await source.loadComicPages!(
+        collection,
+        remotePdfChapterId('/library/Series/chapter2.pdf'),
+      );
+      expect(missing.error, isTrue);
+      expect(probe.openCount, 0);
+    },
+  );
+
+  test('direct browsing uses the original legacy comic identity', () async {
+    final previousConfig = appdata.settings['webdavComicLibrary'];
+    final previousPath = appdata.settings['webdavComicLibraryPath'];
+    try {
+      appdata.settings['webdavComicLibrary'] = [
+        'https://example.invalid/',
+        '',
+        '',
+      ];
+      appdata.settings['webdavComicLibraryPath'] = '/library/';
+      final legacy = WebDavLibraryEngine(
+        library: const RemoteLibrary(
+          id: 'legacy-library',
+          sourceKey: WebDavLibrarySource.sourceKey,
+          accountId: 'pdf-account',
+          directories: ['/library/'],
+          name: 'Legacy',
+          autoRefresh: false,
+        ),
+        store: store,
+      );
+      otherEngines.add(legacy);
+      expect(legacy.comicIdForPath('/library/Series/'), 'Series');
+      expect(
+        legacy.comicIdForPath('/library/Series/chapter2.pdf'),
+        'Series/chapter2.pdf',
+      );
+      expect(engine.comicIdForPath('/library/Series/'), '/library/Series/');
+      expect(() => engine.comicIdForPath('Series'), throwsArgumentError);
+      store.collectionMode = true;
+      final legacySource = legacy.create();
+      final info = await legacySource.loadComicInfo!('Series');
+      expect(info.success, isTrue, reason: info.errorMessage);
+      expect(info.data.id, 'Series');
+      final chapter = info.data.chapters!.ids.first;
+      final absolute = await legacySource.loadComicInfo!('/library/Series/');
+      expect(absolute.success, isTrue, reason: absolute.errorMessage);
+      expect(
+        absolute.data.chapters!.allChapters,
+        info.data.chapters!.allChapters,
+      );
+      final absolutePages = await legacySource.loadComicPages!(
+        '/library/Series/',
+        chapter,
+      );
+      expect(absolutePages.success, isTrue, reason: absolutePages.errorMessage);
+      final pages = await legacySource.loadComicPages!('Series', chapter);
+      expect(pages.success, isTrue, reason: pages.errorMessage);
+      expect(pages.data, hasLength(3));
+      expect(
+        archiveImage(pages.data.first).path,
+        '/library/Series/chapter2.pdf',
+      );
+      final rendered = _decodeJpeg(
+        await loadPage(pages.data[1], from: legacySource),
+        width: 6,
+        height: 12,
+      );
+      expect(rendered.b, greaterThan(180));
+      final standalone = await legacySource.loadComicInfo!(
+        'Series/chapter2.pdf',
+      );
+      expect(standalone.success, isTrue, reason: standalone.errorMessage);
+      expect(standalone.data.id, 'Series/chapter2.pdf');
+      expect(standalone.data.chapters!.titles, ['Opening', 'Finale']);
+    } finally {
+      appdata.settings['webdavComicLibrary'] = previousConfig;
+      appdata.settings['webdavComicLibraryPath'] = previousPath;
+    }
+  });
+
+  test(
     'PDF discovery stays lazy and native bookmarks include the first page',
     () async {
       final sync = await engine.synchronize();
@@ -267,7 +561,7 @@ void main() {
       expect(info.data.chapterPageCounts.values, [2, 1]);
       expect(info.data.chapterGroups, isEmpty);
       final pages = await chapterPages(info.data);
-      expect(pages.map((key) => RemoteArchiveComic.parseImageKey(key)!.entry), [
+      expect(pages.map((key) => archiveImage(key).entry), [
         'pdf:1',
         'pdf:2',
         'pdf:3',
@@ -772,6 +1066,9 @@ class _PdfStore implements RemoteFileStore {
         })
       >[];
   var mixed = false;
+  var collectionMode = false;
+  var collectionCover = false;
+  final collectionNames = ['chapter10.pdf', 'chapter2.pdf'];
   var failNextWrite = false;
   var downloads = 0;
 
@@ -787,6 +1084,29 @@ class _PdfStore implements RemoteFileStore {
   @override
   Future<List<RemoteEntry>> list(String directory) async {
     listPaths.add(directory);
+    if (collectionMode) {
+      if (directory == '/library/') {
+        return const [
+          RemoteEntry(
+            name: 'Series',
+            path: '/library/Series/',
+            isDirectory: true,
+          ),
+        ];
+      }
+      if (directory == '/library/Series/') {
+        return [
+          for (final name in collectionNames) collectionFile(name),
+          if (collectionCover)
+            const RemoteEntry(
+              name: 'cover.jpg',
+              path: '/library/Series/cover.jpg',
+              isDirectory: false,
+            ),
+        ];
+      }
+      return const [];
+    }
     if (mixed && directory == '/library/') {
       return const [
         RemoteEntry(name: 'Mixed', path: '/library/Mixed/', isDirectory: true),
@@ -816,6 +1136,12 @@ class _PdfStore implements RemoteFileStore {
   @override
   Future<RemoteEntry> stat(String path) async {
     statPaths.add(path);
+    if (collectionMode) {
+      final name = collectionNames.firstWhere(
+        (name) => '/library/Series/$name' == path,
+      );
+      return collectionFile(name);
+    }
     expect(path, file().path);
     return file();
   }
@@ -823,6 +1149,13 @@ class _PdfStore implements RemoteFileStore {
   @override
   Future<RemoteLink> link(String path) async {
     linkedPaths.add(path);
+    if (collectionMode) {
+      expect(
+        collectionNames.map((name) => '/library/Series/$name'),
+        contains(path),
+      );
+      return remoteLink;
+    }
     expect(path, file().path);
     return remoteLink;
   }
@@ -881,6 +1214,18 @@ class _PdfStore implements RemoteFileStore {
 
   @override
   Future<void> cancelAll() async {}
+
+  RemoteEntry collectionFile(String name) {
+    final template = file();
+    return RemoteEntry(
+      name: name,
+      path: '/library/Series/$name',
+      isDirectory: false,
+      size: template.size,
+      eTag: template.eTag,
+      modifiedAt: template.modifiedAt,
+    );
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
 
 import 'remote_archive_comic.dart';
+import 'remote_pdf_collection.dart';
 
 const remoteComicWorkPrefix = 'remote-work:';
 const remoteComicWorkImagePrefix = 'remote-work-image:';
@@ -13,18 +14,23 @@ class RemoteComicVolume {
     required this.archive,
     required this.title,
     this.edition = '',
+    this.logicalId,
   });
 
   RemoteArchiveComic archive;
   final String title;
   final String edition;
 
-  String get id => archive.path;
+  /// The persisted chapter identity may predate the work transport model.
+  final String? logicalId;
+
+  String get id => logicalId ?? archive.path;
 
   Map<String, dynamic> toJson() => {
     'archive': archive.toJson(),
     'title': title,
     'edition': edition,
+    if (logicalId != null) 'logicalId': logicalId,
   };
 
   factory RemoteComicVolume.fromJson(Map<String, dynamic> json) =>
@@ -34,6 +40,7 @@ class RemoteComicVolume {
         ),
         title: json['title'] as String,
         edition: json['edition'] as String? ?? '',
+        logicalId: json['logicalId'] as String?,
       );
 }
 
@@ -43,6 +50,7 @@ class RemoteComicWork {
     required this.title,
     required this.volumes,
     this.family,
+    this.logicalId,
   });
 
   final String directory;
@@ -52,7 +60,19 @@ class RemoteComicWork {
   final String? family;
   final List<RemoteComicVolume> volumes;
 
+  /// Pure PDF directories keep their established comic/history identity.
+  final String? logicalId;
+
+  bool get isPdfDirectory =>
+      logicalId != null &&
+      volumes.isNotEmpty &&
+      volumes.every(
+        (volume) =>
+            volume.logicalId?.startsWith(remotePdfChapterPrefix) == true,
+      );
+
   String get id =>
+      logicalId ??
       '$remoteComicWorkPrefix${base64Url.encode(utf8.encode(jsonEncode([directory, family])))}';
 
   String get metadataFileName =>
@@ -71,7 +91,19 @@ class RemoteComicWork {
 
   RemoteComicVolume? volume(String id) {
     for (final volume in volumes) {
-      if (volume.id == id) return volume;
+      if (volume.id == id || volume.archive.path == id) return volume;
+      if (id.startsWith(remotePdfChapterPrefix)) {
+        try {
+          final path = utf8.decode(
+            base64Url.decode(id.substring(remotePdfChapterPrefix.length)),
+          );
+          if (volume.archive.isPdf && path == volume.archive.path) {
+            return volume;
+          }
+        } on FormatException {
+          // An invalid or nonmember alias must never select another archive.
+        }
+      }
     }
     return null;
   }
@@ -133,6 +165,7 @@ class RemoteComicWork {
     'directory': directory,
     'title': title,
     'family': family,
+    if (logicalId != null) 'logicalId': logicalId,
     'volumes': volumes.map((volume) => volume.toJson()).toList(),
   };
 
@@ -141,6 +174,7 @@ class RemoteComicWork {
         directory: json['directory'] as String,
         title: json['title'] as String,
         family: json['family'] as String?,
+        logicalId: json['logicalId'] as String?,
         volumes: [
           for (final volume in json['volumes'] as List)
             RemoteComicVolume.fromJson(

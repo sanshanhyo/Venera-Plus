@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:venera_plus/app_shell/home_page.dart';
 import 'package:venera_plus/app_shell/library_page.dart';
 import 'package:venera_plus/features/discovery/discovery.dart';
-import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/features/search/search.dart';
 import 'package:venera_plus/features/settings/settings.dart';
 import 'package:venera_plus/features/sync/sync.dart';
@@ -133,7 +132,7 @@ class _MainPageState extends State<MainPage> {
             },
           ),
         ),
-        if (index == 0) const ReadingFavoritesMenuButton(),
+        if (index == 0) const HomeMenuButton(),
       ],
       pageBuilder: (pageIndex) {
         return _MainShellPages(
@@ -190,6 +189,7 @@ class _MainShellPagesState extends State<_MainShellPages> {
         return HomePage(
           key: const PageStorageKey('main_home'),
           onOpenHistory: widget.onOpenHistory,
+          isActive: widget.currentIndex == 0,
         );
       case 1:
         return LibraryPage(

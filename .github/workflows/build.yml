@@ -2,6 +2,10 @@ name: 构建
 run-name: 构建 ${{ github.ref_name }}
 
 on:
+  push:
+    branches:
+      - 'feat/cloud-home-better-crawler'
+      - 'feat/integrate-cloud-home-metadata'
   workflow_call:
     inputs:
       release_mode:
@@ -12,6 +16,10 @@ on:
         required: false
         type: boolean
         default: true
+      build_android_preview:
+        required: false
+        type: boolean
+        default: false
       build_windows:
         required: false
         type: boolean
@@ -44,6 +52,11 @@ on:
         required: true
         type: boolean
         default: true
+      build_android_preview:
+        description: '构建可独立安装的 Android 测试版'
+        required: false
+        type: boolean
+        default: false
       build_windows:
         description: '构建 Windows'
         required: true
@@ -79,10 +92,13 @@ permissions:
 
 jobs:
   Build_Android:
-    if: ${{ inputs.build_android }}
+    if: ${{ inputs.build_android || (github.event_name == 'push' && (github.ref == 'refs/heads/feat/cloud-home-better-crawler' || github.ref == 'refs/heads/feat/integrate-cloud-home-metadata') && !contains(toJSON(inputs), '"build_android"')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: ${{ inputs.release_mode && 360 || 45 }}
     env:
+      # A direct feature push has no inputs. Reusable calls keep their explicit
+      # default false even when the caller itself was triggered by that push.
+      VENERA_ANDROID_PREVIEW: ${{ !inputs.release_mode && (inputs.build_android_preview || (github.event_name == 'push' && (github.ref == 'refs/heads/feat/cloud-home-better-crawler' || github.ref == 'refs/heads/feat/integrate-cloud-home-metadata') && !contains(toJSON(inputs), '"build_android_preview"'))) }}
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"

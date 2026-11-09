@@ -54,7 +54,8 @@ class BangumiMetadataHints {
     r'\s*(?:\[([^\[\]]+)\]|【([^【】]+)】|\(([^()]+)\))\s*$',
   );
   static final _noise = RegExp(
-    r'^(?:chinese|中文|中国翻訳|中國翻譯|中国翻译|漢化|汉化|翻訳|翻譯|翻译|'
+    r'^(?:chinese|(?:china|chinese)中文|中文|简体中文|繁体中文|簡體中文|繁體中文|'
+    r'english|英文(?:版)?|中国翻訳|中國翻譯|中国翻译|漢化|汉化|翻訳|翻譯|翻译|'
     r'无修正|無修正|dl版|digital|完结|已完结|完結|已完結|'
     r'全\d+(?:卷|巻|册|冊)|kindle(?:版)?|高清(?:版)?|日文(?:版)?|日本語|'
     r'台版|臺版|台湾版|台灣版|典藏版|珍藏版|重制版|重製版|'
@@ -62,6 +63,19 @@ class BangumiMetadataHints {
     r'(?:19|20)\d{2}(?:年)?(?:重制|重製|重制版|重製版|新版|修订版|修訂版)?)$',
     caseSensitive: false,
   );
+  static final _volumePackage = RegExp(
+    r'^(?:(?:全|第)?\d+(?:[-–—~～至到]\d+)?(?:卷|巻|册|冊)'
+    r'(?:完整版|完结版|完結版|完结|完結)?|'
+    r'\d+[-–—~～至到]\d+(?:卷|巻|册|冊)?'
+    r'(?:完整版|完结版|完結版|完结|完結)?|'
+    r'完整版|完结版|完結版|全集|全套|complete)$',
+    caseSensitive: false,
+  );
+  static final _archiveExtension = RegExp(
+    r'\.(?:pdf|zip|cbz|epub|cbr|7z|cb7)$',
+    caseSensitive: false,
+  );
+  static final _releaseGroup = RegExp(r'^[A-Z][A-Z0-9 ._-]{1,31}$');
   static final _magazine = RegExp(r'雑誌|雜誌|杂志');
   static final _issue = RegExp(
     r'((?:19|20)\d{2})\s*年\s*(0?[1-9]|1[0-2])\s*月\s*[号號]',
@@ -191,6 +205,12 @@ class BangumiMetadataHints {
     Set<String>? explicitAuthors,
   }) {
     var remaining = width(value).trim();
+    // A top-level work hint may itself be an archive filename. Keep this
+    // separate from member parsing, whose creator and volume evidence matters.
+    final archiveTitle = !isFile && _archiveExtension.hasMatch(remaining);
+    if (archiveTitle) {
+      remaining = remaining.replaceFirst(_archiveExtension, '');
+    }
     if (isFile) {
       final image = isComicImageFileName(remaining);
       if (!image &&
@@ -241,7 +261,10 @@ class BangumiMetadataHints {
         final bracket = pattern.firstMatch(remaining);
         if (bracket == null) continue;
         final marker = bracket[1] ?? bracket[2] ?? bracket[3]!;
-        if (!_noise.hasMatch(marker.replaceAll(RegExp(r'\s+'), ''))) continue;
+        final compact = marker.replaceAll(RegExp(r'\s+'), '');
+        if (!_noise.hasMatch(compact) && !_volumePackage.hasMatch(compact)) {
+          continue;
+        }
         remaining = remaining
             .replaceRange(bracket.start, bracket.end, '')
             .trim();
@@ -281,6 +304,13 @@ class BangumiMetadataHints {
     final creator = _creatorPrefix.firstMatch(candidate);
     if (creator != null) {
       final creatorName = creator[1] ?? creator[2]!;
+      if (archiveTitle && _releaseGroup.hasMatch(creatorName)) {
+        // A distribution prefix may also be part of the actual title. Keep
+        // both names so different exact subjects remain ambiguous.
+        add(remaining);
+        add(creator[3]!);
+        return result;
+      }
       add(creator[3]!, creator: _authorNames(creatorName));
       if (_generic.hasMatch(creator[3]!.trim())) return const [];
     }

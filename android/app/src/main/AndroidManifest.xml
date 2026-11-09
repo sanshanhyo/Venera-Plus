@@ -11,12 +11,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <application
-        android:label="VeneraPlus"
+        android:label="${veneraAppLabel}"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
-        <service android:name=".DownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name="com.github.veneraworks.veneraplus.DownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
         <provider
-            android:name=".AppUpdateFileProvider"
+            android:name="com.github.veneraworks.veneraplus.AppUpdateFileProvider"
             android:authorities="${applicationId}.app_update"
             android:exported="false"
             android:grantUriPermissions="true">
@@ -25,7 +25,7 @@
                 android:resource="@xml/app_update_paths" />
         </provider>
         <activity
-            android:name=".MainActivity"
+            android:name="com.github.veneraworks.veneraplus.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""

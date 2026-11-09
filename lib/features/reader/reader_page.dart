@@ -23,7 +23,7 @@ import 'package:venera_plus/features/reader/images.dart';
 import 'package:venera_plus/features/reader/reading_session.dart';
 import 'package:venera_plus/features/reader/remote_progress.dart';
 import 'package:venera_plus/features/reader/scaffold.dart';
-import 'package:venera_plus/features/reader/volume.dart';
+import 'package:venera_plus/foundation/volume_navigation.dart';
 import 'package:venera_plus/features/sync/sync.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
@@ -802,16 +802,21 @@ class ReaderState extends State<Reader>
     }
     _checkImagesPerPageChange();
     _syncScreenAwake();
-    return KeyboardListener(
-      focusNode: focusNode,
-      autofocus: true,
-      onKeyEvent: onKeyEvent,
-      child: Overlay.wrap(
-        child: ReaderScaffold(
-          child: ReaderGestureDetector(
-            child: ReaderImages(
-              key: Key(
-                '${mode.isWaterfall ? mode.key : chapter}:$_bookmarkNavigationGeneration',
+    return VolumePageScope(
+      enabled: volumeKeyNavigationEnabled,
+      onPrevious: onUp,
+      onNext: onDown,
+      child: KeyboardListener(
+        focusNode: focusNode,
+        autofocus: true,
+        onKeyEvent: onKeyEvent,
+        child: Overlay.wrap(
+          child: ReaderScaffold(
+            child: ReaderGestureDetector(
+              child: ReaderImages(
+                key: Key(
+                  '${mode.isWaterfall ? mode.key : chapter}:$_bookmarkNavigationGeneration',
+                ),
               ),
             ),
           ),
@@ -1340,7 +1345,7 @@ abstract mixin class ReaderVolumeListener {
     ReadingNavigationSource source = ReadingNavigationSource.userBackward,
   });
 
-  VolumeListener? volumeListener;
+  bool volumeKeyNavigationEnabled = false;
 
   void onDown() {
     if (!toNextPage(source: ReadingNavigationSource.userForward)) {
@@ -1358,21 +1363,11 @@ abstract mixin class ReaderVolumeListener {
   }
 
   void handleVolumeEvent() {
-    if (!App.isAndroid) {
-      // Currently only support Android
-      return;
-    }
-    if (volumeListener != null) {
-      volumeListener?.cancel();
-    }
-    volumeListener = VolumeListener(onDown: onDown, onUp: onUp)..listen();
+    volumeKeyNavigationEnabled = true;
   }
 
   void stopVolumeEvent() {
-    if (volumeListener != null) {
-      volumeListener?.cancel();
-      volumeListener = null;
-    }
+    volumeKeyNavigationEnabled = false;
   }
 }
 
