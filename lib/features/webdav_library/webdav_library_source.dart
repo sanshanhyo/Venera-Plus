@@ -8,6 +8,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/features/webdav_library/webdav_library_cache.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/foundation/extensions.dart';
@@ -921,7 +922,7 @@ class WebDavLibrarySource {
       DateTime.now().millisecondsSinceEpoch;
   static const _maxMetadataMergeAttempts = 3;
   static const _maxMetadataRetryAttempts = 4;
-  static const _defaultScraperVersion = '2';
+  static const _defaultScraperVersion = '3';
   static const _metadataPendingKey = 'webdavMetadataPending';
   static String get _metadataPendingStorageKey {
     final config = WebDavLibraryConfig.fromSettings();
@@ -1259,16 +1260,18 @@ class WebDavLibrarySource {
       final comics = _cache
           .page(config.cacheKey, page: page, pageSize: pageSize, roots: roots)
           .map(
-            (comic) => Comic(
-              comic.title,
-              comic.cover,
-              comic.id,
-              null,
-              comic.tags,
-              '',
-              _activeSourceKey,
-              null,
-              null,
+            (comic) => MetadataStore.applyAppComic(
+              Comic(
+                comic.title,
+                comic.cover,
+                comic.id,
+                null,
+                comic.tags,
+                '',
+                _activeSourceKey,
+                null,
+                null,
+              ),
             ),
           )
           .toList();
@@ -1662,41 +1665,44 @@ class WebDavLibrarySource {
           ? null
           : _archiveChapterDisplay(snapshot.archive!);
       return Res(
-        ComicDetails.fromJson({
-          'title': snapshot.title,
-          'subtitle': null,
-          'cover': snapshot.cover,
-          'description': snapshot.description,
-          'tags': snapshot.detailTags,
-          'chapters':
-              snapshot.work?.chapters ??
-              archiveDisplay?.titles ??
-              (snapshot.chapters.length == 1 &&
-                      snapshot.chapters.containsKey(rootChapterId)
-                  ? null
-                  : snapshot.chapters),
-          'chapterGroups': archiveDisplay?.groups,
-          'chapterPageCounts':
-              snapshot.work?.pageCounts ?? snapshot.archive?.chapterPageCounts,
-          'sourceKey': _activeSourceKey,
-          'comicId': id,
-          'externalIds': {
-            if (snapshot.bangumiSubjectId != null)
-              'bangumi': snapshot.bangumiSubjectId.toString(),
-          },
-          'thumbnails': null,
-          'recommend': null,
-          'isFavorite': false,
-          'subId': null,
-          'likesCount': null,
-          'isLiked': null,
-          'commentCount': null,
-          'uploader': null,
-          'uploadTime': null,
-          'updateTime': null,
-          'url': null,
-          'maxPage': snapshot.pageCount,
-        }),
+        MetadataStore.applyAppDetails(
+          ComicDetails.fromJson({
+            'title': snapshot.title,
+            'subtitle': null,
+            'cover': snapshot.cover,
+            'description': snapshot.description,
+            'tags': snapshot.detailTags,
+            'chapters':
+                snapshot.work?.chapters ??
+                archiveDisplay?.titles ??
+                (snapshot.chapters.length == 1 &&
+                        snapshot.chapters.containsKey(rootChapterId)
+                    ? null
+                    : snapshot.chapters),
+            'chapterGroups': archiveDisplay?.groups,
+            'chapterPageCounts':
+                snapshot.work?.pageCounts ??
+                snapshot.archive?.chapterPageCounts,
+            'sourceKey': _activeSourceKey,
+            'comicId': id,
+            'externalIds': {
+              if (snapshot.bangumiSubjectId != null)
+                'bangumi': snapshot.bangumiSubjectId.toString(),
+            },
+            'thumbnails': null,
+            'recommend': null,
+            'isFavorite': false,
+            'subId': null,
+            'likesCount': null,
+            'isLiked': null,
+            'commentCount': null,
+            'uploader': null,
+            'uploadTime': null,
+            'updateTime': null,
+            'url': null,
+            'maxPage': snapshot.pageCount,
+          }),
+        ),
       );
     } catch (e) {
       return Res.error(e.toString());
@@ -1781,9 +1787,7 @@ class WebDavLibrarySource {
         if (snapshot.work != null) {
           return await _loadWorkPages(config, snapshot, ep);
         }
-        if (ep?.startsWith(remotePdfChapterPrefix) == true) {
-          return const Res.error('Invalid PDF collection chapter');
-        }
+        return const Res.error('Comic volume is unavailable');
       }
       if (_isArchiveId(id)) {
         final snapshot = await _loadSnapshot(config, id);
@@ -4139,7 +4143,16 @@ class WebDavLibraryEngine {
     return WebDavLibraryEngine._(library, context, store);
   }
 
-  WebDavLibraryEngine._(this.library, this._context, this._store);
+  WebDavLibraryEngine._(this.library, this._context, this._store) {
+    _metadataStore = MetadataStore.appOrNull;
+    _metadataStore?.addListener(_metadataChanged);
+  }
+
+  MetadataStore? _metadataStore;
+
+  void _metadataChanged() {
+    if (!_cancelled) contentVersion.value++;
+  }
 
   final RemoteLibrary library;
   final _WebDavLibraryContext _context;
@@ -4210,6 +4223,7 @@ class WebDavLibraryEngine {
   void cancel() {
     if (_cancelled) return;
     _cancelled = true;
+    _metadataStore?.removeListener(_metadataChanged);
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = null;
     _run(() {

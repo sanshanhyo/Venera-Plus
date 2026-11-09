@@ -17,6 +17,7 @@ import 'package:venera_plus/features/comic_widgets/comic_widgets.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/features/history/history.dart';
 import 'package:venera_plus/features/local_comics/local_comics.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/features/reader/reader.dart';
 import 'package:venera_plus/features/search/search_shortcuts.dart';
 import 'package:venera_plus/foundation/app.dart';
@@ -86,6 +87,8 @@ abstract mixin class ComicPageActions {
     }
   }
 
+  void onMetadataChanged();
+
   ComicDetails get comic;
 
   ComicSource get comicSource => ComicSource.find(comic.sourceKey)!;
@@ -117,16 +120,17 @@ abstract mixin class ComicPageActions {
   bool isFavorite = false;
 
   FavoriteItem _toFavoriteItem() {
+    final original = MetadataStore.originalDetails(comic);
     var tags = <String>[];
-    for (var e in comic.tags.entries) {
+    for (var e in original.tags.entries) {
       tags.addAll(e.value.map((tag) => '${e.key}:$tag'));
     }
     return FavoriteItem(
-      id: comic.id,
-      name: comic.title,
-      coverPath: comic.cover,
-      author: comic.subTitle ?? comic.uploader ?? '',
-      type: comic.comicType,
+      id: original.id,
+      name: original.title,
+      coverPath: original.cover,
+      author: original.subTitle ?? original.uploader ?? '',
+      type: original.comicType,
       tags: tags,
     );
   }
@@ -213,6 +217,16 @@ abstract mixin class ComicPageActions {
         chapters: comic.chapters,
         history: history,
       ),
+    );
+  }
+
+  Future<void> openMetadataInformation() async {
+    await showMetadataPanel(
+      App.rootContext,
+      sourceKey: comic.sourceKey,
+      comicId: comic.id,
+      comicTitle: comic.title,
+      onChanged: onMetadataChanged,
     );
   }
 
@@ -502,6 +516,12 @@ abstract mixin class ComicPageActions {
   void showMoreActions() {
     var context = App.rootContext;
     showMenuX(context, Offset(context.width - 16, context.padding.top), [
+      if (supportsMetadataCompletion(comic.sourceKey))
+        MenuEntry(
+          icon: Icons.auto_fix_high_outlined,
+          text: 'Complete information'.tl,
+          onClick: openMetadataInformation,
+        ),
       MenuEntry(
         icon: Icons.swap_horiz,
         text: 'Switch source'.tl,

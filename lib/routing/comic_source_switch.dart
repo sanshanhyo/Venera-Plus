@@ -3,6 +3,7 @@ import 'package:venera_plus/features/bangumi/bangumi.dart';
 import 'package:venera_plus/features/comic_details/comic_details.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/features/search/search.dart';
 import 'package:venera_plus/features/sync/sync.dart';
 import 'package:venera_plus/foundation/comic_type.dart';
@@ -25,6 +26,7 @@ Future<ComicDetails?> switchComicSource(
     return null;
   }
   try {
+    final original = MetadataStore.originalDetails(selected);
     await BangumiService().copyBindingToSource(
       sourceKey: sourceKey,
       comicId: id,
@@ -35,21 +37,21 @@ Future<ComicDetails?> switchComicSource(
       id,
       ComicType.fromKey(sourceKey),
       FavoriteItem(
-        id: selected.id,
-        name: selected.title,
-        coverPath: selected.cover,
-        author: selected.findAuthor() ?? selected.subTitle ?? '',
-        type: selected.comicType,
+        id: original.id,
+        name: original.title,
+        coverPath: original.cover,
+        author: original.findAuthor() ?? original.subTitle ?? '',
+        type: original.comicType,
         tags: [
-          for (final entry in selected.tags.entries)
+          for (final entry in original.tags.entries)
             for (final tag in entry.value) '${entry.key}:$tag',
         ],
       ),
       updateSnapshot: ComicUpdateSnapshot.fromChapters(
-        selected.chapters?.toJson(),
-        updateTime: selected.findUpdateTime(),
-        maxPage: selected.maxPage,
-        chapterPageCounts: selected.chapterPageCounts,
+        original.chapters?.toJson(),
+        updateTime: original.findUpdateTime(),
+        maxPage: original.maxPage,
+        chapterPageCounts: original.chapterPageCounts,
       ),
     );
     DataSync().onDataChanged();

@@ -40,6 +40,22 @@ on:
         required: false
         type: boolean
         default: true
+      metadata_validation:
+        required: false
+        type: boolean
+        default: false
+      metadata_capture_screenshots:
+        required: false
+        type: boolean
+        default: true
+      metadata_check_connectivity:
+        required: false
+        type: boolean
+        default: false
+      metadata_options:
+        required: false
+        type: string
+        default: '{}'
     secrets:
       ANDROID_KEYSTORE:
         required: false
@@ -82,6 +98,26 @@ on:
         required: true
         type: boolean
         default: false
+      metadata_validation:
+        description: '运行 EH/JM 合成数据截图验证'
+        required: false
+        type: boolean
+        default: false
+      metadata_capture_screenshots:
+        description: '元数据检查包含 Android 模拟器截图'
+        required: false
+        type: boolean
+        default: true
+      metadata_check_connectivity:
+        description: '额外运行 EH/JM 真实网络检查（仅手动触发）'
+        required: false
+        type: boolean
+        default: false
+      metadata_options:
+        description: '可选 JSON：eh_gallery_url、jm_reference、jm_base_url、jm_cover_base_url'
+        required: false
+        type: string
+        default: '{}'
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.repository }}-${{ github.ref }}
@@ -91,6 +127,18 @@ permissions:
   contents: read
 
 jobs:
+  Metadata_Validation:
+    name: EH/JM 合成截图与可选网络检查
+    if: ${{ inputs.metadata_validation }}
+    uses: ./.github/workflows/metadata_validation.yml
+    with:
+      capture_screenshots: ${{ inputs.metadata_capture_screenshots }}
+      check_connectivity: ${{ inputs.metadata_check_connectivity && github.event_name == 'workflow_dispatch' }}
+      eh_gallery_url: ${{ fromJSON(inputs.metadata_options || '{}').eh_gallery_url || '' }}
+      jm_reference: ${{ fromJSON(inputs.metadata_options || '{}').jm_reference || '' }}
+      jm_base_url: ${{ fromJSON(inputs.metadata_options || '{}').jm_base_url || 'https://18comic.vip' }}
+      jm_cover_base_url: ${{ fromJSON(inputs.metadata_options || '{}').jm_cover_base_url || 'https://cdn-msp.jmapiproxy1.cc' }}
+
   Build_Android:
     if: ${{ inputs.build_android || (github.event_name == 'push' && (github.ref == 'refs/heads/feat/cloud-home-better-crawler' || github.ref == 'refs/heads/feat/integrate-cloud-home-metadata') && !contains(toJSON(inputs), '"build_android"')) }}
     runs-on: ubuntu-22.04

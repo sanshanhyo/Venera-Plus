@@ -21,6 +21,7 @@ import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/features/history/history.dart';
 import 'package:venera_plus/features/local_comics/local_comics.dart';
 import 'package:venera_plus/features/app_update/app_update.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/features/sync/sync.dart';
 import 'package:venera_plus/features/webdav_library/webdav_library.dart';
 import 'package:venera_plus/foundation/image_provider/cached_image.dart';
@@ -235,6 +236,7 @@ Future<void> prepareReadingDataForExit() async {
 Future<void> init({bool deferBackgroundTasks = false}) async {
   StartupTiming.failedStage = null;
   await StartupTiming.measure('App paths', App.init);
+  configureMetadataCoverLoading();
   await Log.startFileSession(
     File('${App.externalStoragePath ?? App.dataPath}/logs.txt'),
   );
@@ -495,7 +497,9 @@ ImageProvider? _resolveComicTileImageProvider(Comic comic) {
   if (comic.cover.trim().isEmpty) return null;
   if (comic is LocalComic) return LocalComicImageProvider(comic);
   if (comic is History) return HistoryImageProvider(comic);
-  if (comic.sourceKey == 'local') {
+  if (comic.sourceKey == 'local' &&
+      !(comic is FavoriteItem &&
+          comic.cover.startsWith('$metadataCoverScheme:'))) {
     final localComic = LocalManager().find(comic.id, ComicType.local);
     return localComic == null ? null : FileImage(localComic.coverFile);
   }

@@ -83,6 +83,25 @@ class Comic {
   ) : favoriteId = null,
       stars = null;
 
+  Comic.withMetadata(
+    Comic base, {
+    String? title,
+    String? cover,
+    String? subtitle,
+    List<String>? tags,
+    String? description,
+  }) : title = title ?? base.title,
+       cover = cover ?? base.cover,
+       id = base.id,
+       subtitle = subtitle ?? base.subtitle,
+       tags = tags ?? base.tags,
+       description = description ?? base.description,
+       sourceKey = base.sourceKey,
+       maxPage = base.maxPage,
+       language = base.language,
+       favoriteId = base.favoriteId,
+       stars = base.stars;
+
   Map<String, dynamic> toJson() {
     return {
       "title": title,
@@ -228,6 +247,42 @@ class ComicDetails with HistoryMixin {
           entry.key as String: entry.value as int,
     };
   }
+
+  /// Apply display metadata while retaining the original reading identity,
+  /// chapter order, progress targets and source-specific actions.
+  ComicDetails.withMetadata(
+    ComicDetails base, {
+    String? title,
+    String? subtitle,
+    String? cover,
+    String? description,
+    Map<String, List<String>>? tags,
+    Map<String, String>? externalIds,
+  }) : title = title ?? base.title,
+       subTitle = subtitle ?? base.subTitle,
+       cover = cover ?? base.cover,
+       description = description ?? base.description,
+       tags = tags ?? base.tags,
+       chapters = base.chapters,
+       chapterPageCounts = base.chapterPageCounts,
+       chapterGroups = base.chapterGroups,
+       thumbnails = base.thumbnails,
+       recommend = base.recommend,
+       sourceKey = base.sourceKey,
+       comicId = base.comicId,
+       isFavorite = base.isFavorite,
+       subId = base.subId,
+       externalIds = externalIds ?? base.externalIds,
+       isLiked = base.isLiked,
+       likesCount = base.likesCount,
+       commentCount = base.commentCount,
+       uploader = base.uploader,
+       uploadTime = base.uploadTime,
+       updateTime = base.updateTime,
+       url = base.url,
+       stars = base.stars,
+       maxPage = base.maxPage,
+       comments = base.comments;
 
   ComicDetails.fromJson(Map<String, dynamic> json)
     : title = json["title"],

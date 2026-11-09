@@ -7,6 +7,8 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/features/favorites/local_favorite_image.dart';
 import 'package:venera_plus/features/local_comics/local_comics.dart';
+import 'package:venera_plus/features/history/history.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/foundation/log.dart';
 import 'package:venera_plus/foundation/sqlite_connection.dart';
 import 'dart:io';
@@ -24,48 +26,127 @@ String _getTimeString(DateTime time) {
 }
 
 class FavoriteItem implements Comic {
-  String name;
-  String author;
+  String _name;
+  String _author;
   ComicType type;
+  List<String> _tags;
+
+  MetadataBinding? get _metadata => MetadataStore.lookupApp(sourceKey, id);
+
+  String get name => _metadata?.result.title ?? _name;
+  set name(String value) => _name = value;
+
+  String get author {
+    final authors = _metadata?.result.authors;
+    return authors?.isNotEmpty == true ? authors!.join(', ') : _author;
+  }
+
+  set author(String value) => _author = value;
+
   @override
-  List<String> tags;
+  List<String> get tags {
+    final result = _metadata?.result;
+    if (result == null) return _tags;
+    return {
+      ..._tags,
+      for (final entry in result.tags.entries)
+        ...entry.value.map((tag) => '${entry.key}:$tag'),
+      ...result.authors.map((author) => 'author:$author'),
+    }.toList();
+  }
+
+  set tags(List<String> value) => _tags = value;
+
   @override
   String id;
-  String coverPath;
+  String _coverPath;
+
+  String get coverPath {
+    final metadata = _metadata;
+    return metadata == null
+        ? _coverPath
+        : MetadataStore.appOrNull?.coverKey(metadata) ?? _coverPath;
+  }
+
+  set coverPath(String value) => _coverPath = value;
+
+  String get storedName => _name;
+  String get storedAuthor => _author;
+  List<String> get storedTags => _tags;
+  String get storedCoverPath => _coverPath;
   late String time;
 
   FavoriteItem({
     required this.id,
-    required this.name,
-    required this.coverPath,
-    required this.author,
+    required String name,
+    required String coverPath,
+    required String author,
     required this.type,
-    required this.tags,
+    required List<String> tags,
     DateTime? favoriteTime,
-  }) {
+  }) : _name = name,
+       _coverPath = coverPath,
+       _author = author,
+       _tags = tags {
     var t = favoriteTime ?? DateTime.now();
     time = _getTimeString(t);
   }
 
   FavoriteItem._copy(FavoriteItem item)
-    : name = item.name,
-      author = item.author,
+    : _name = item.storedName,
+      _author = item.storedAuthor,
       type = item.type,
-      tags = item.tags,
+      _tags = List<String>.of(item.storedTags),
       id = item.id,
-      coverPath = item.coverPath {
+      _coverPath = item.storedCoverPath {
     time = item.time;
   }
 
   FavoriteItem.fromRow(Row row)
-    : name = row["name"],
-      author = row["author"],
+    : _name = row["name"],
+      _author = row["author"],
       type = ComicType(row["type"]),
-      tags = (row["tags"] as String).split(","),
+      _tags = (row["tags"] as String).split(","),
       id = row["id"],
-      coverPath = row["cover_path"],
+      _coverPath = row["cover_path"],
       time = row["time"] {
-    tags.remove("");
+    _tags.remove("");
+  }
+
+  factory FavoriteItem.fromComic(Comic comic) {
+    final original = MetadataStore.originalComic(comic);
+    return FavoriteItem(
+      id: original.id,
+      name: switch (original) {
+        FavoriteItem() => original.storedName,
+        History() => original.storedTitle,
+        LocalComic() => original.storedTitle,
+        _ => original.title,
+      },
+      author: switch (original) {
+        FavoriteItem() => original.storedAuthor,
+        History() => original.storedSubtitle,
+        LocalComic() => original.storedSubtitle,
+        _ => original.subtitle ?? '',
+      },
+      coverPath: switch (original) {
+        FavoriteItem() => original.storedCoverPath,
+        History() => original.storedCover,
+        LocalComic() => original.storedCover,
+        _ => original.cover,
+      },
+      tags: switch (original) {
+        FavoriteItem() => List<String>.of(original.storedTags),
+        LocalComic() => List<String>.of(original.storedTags),
+        _ => List<String>.of(original.tags ?? const []),
+      },
+      type: switch (original) {
+        FavoriteItem() => original.type,
+        History() => original.type,
+        LocalComic() => original.comicType,
+        _ => ComicType.fromKey(original.sourceKey),
+      },
+    );
   }
 
   @override
@@ -106,9 +187,13 @@ class FavoriteItem implements Comic {
   int? get maxPage => null;
 
   @override
-  String get sourceKey => type == ComicType.local
-      ? 'local'
-      : type.comicSource?.key ?? "Unknown:${type.value}";
+  String get sourceKey {
+    try {
+      return type.sourceKey;
+    } on StateError {
+      return type.comicSource?.key ?? "Unknown:${type.value}";
+    }
+  }
 
   @override
   double? get stars => null;
@@ -122,12 +207,12 @@ class FavoriteItem implements Comic {
   @override
   Map<String, dynamic> toJson() {
     return {
-      "name": name,
-      "author": author,
+      "name": storedName,
+      "author": storedAuthor,
       "type": type.value,
-      "tags": tags,
+      "tags": storedTags,
       "id": id,
-      "coverPath": coverPath,
+      "coverPath": storedCoverPath,
     };
   }
 
@@ -163,11 +248,11 @@ class FavoriteItemWithFolderInfo extends FavoriteItem {
   FavoriteItemWithFolderInfo(FavoriteItem item, this.folder)
     : super(
         id: item.id,
-        name: item.name,
-        coverPath: item.coverPath,
-        author: item.author,
+        name: item.storedName,
+        coverPath: item.storedCoverPath,
+        author: item.storedAuthor,
         type: item.type,
-        tags: item.tags,
+        tags: List<String>.of(item.storedTags),
       );
 }
 
@@ -249,6 +334,25 @@ class LocalFavoritesManager with ChangeNotifier {
 
   bool _isClosed = true;
   bool _databaseOpen = false;
+  MetadataStore? _metadataStore;
+  final ChangeNotifier _dataChanges = ChangeNotifier();
+
+  /// Persistence listeners exclude display-only metadata changes.
+  void addDataListener(VoidCallback listener) =>
+      _dataChanges.addListener(listener);
+
+  void removeDataListener(VoidCallback listener) =>
+      _dataChanges.removeListener(listener);
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    _dataChanges.notifyListeners();
+  }
+
+  void _onMetadataChanged() {
+    if (!_isClosed) super.notifyListeners();
+  }
 
   int get totalComics {
     return _hashedIds.length;
@@ -272,6 +376,8 @@ class LocalFavoritesManager with ChangeNotifier {
     _db = openSqliteDatabase(_dbPath);
     _databaseOpen = true;
     _isClosed = false;
+    _metadataStore = MetadataStore.appOrNull;
+    _metadataStore?.addListener(_onMetadataChanged);
     FavoriteSyncData.ensureComicUpdateSchema(_db);
     _loadUpdateStates();
     FavoriteSyncData.ensureFolderMetadataTable(_db);
@@ -285,7 +391,7 @@ class LocalFavoritesManager with ChangeNotifier {
       if (unpopulated.isNotEmpty) {
         var comics = getFolderComics(folder);
         for (var comic in comics) {
-          var translatedTags = _translateTags(comic.tags);
+          var translatedTags = _translateTags(comic.storedTags);
           _db.execute(
             """
             update $qf
@@ -384,6 +490,8 @@ class LocalFavoritesManager with ChangeNotifier {
   void close() {
     if (_isClosed && !_databaseOpen) return;
     _isClosed = true;
+    _metadataStore?.removeListener(_onMetadataChanged);
+    _metadataStore = null;
     _generation++;
     _hashedIds.clear();
     _updatedIds.clear();
@@ -900,14 +1008,14 @@ class LocalFavoritesManager with ChangeNotifier {
     if (res.isNotEmpty) {
       return false;
     }
-    var translatedTags = _translateTags(comic.tags);
+    var translatedTags = _translateTags(comic.storedTags);
     final params = [
       comic.id,
-      comic.name,
-      comic.author,
+      comic.storedName,
+      comic.storedAuthor,
       comic.type.value,
-      comic.tags.join(","),
-      comic.coverPath,
+      comic.storedTags.join(","),
+      comic.storedCoverPath,
       comic.time,
       translatedTags,
     ];
@@ -1441,11 +1549,11 @@ class LocalFavoritesManager with ChangeNotifier {
       where id == ? and type == ?;
     """,
       [
-        comic.name,
-        comic.author,
-        comic.coverPath,
-        comic.tags.join(","),
-        _translateTags(comic.tags),
+        comic.storedName,
+        comic.storedAuthor,
+        comic.storedCoverPath,
+        comic.storedTags.join(","),
+        _translateTags(comic.storedTags),
         comic.id,
         comic.type.value,
       ],
@@ -1499,11 +1607,11 @@ class LocalFavoritesManager with ChangeNotifier {
             [
               replacement.id,
               replacement.type.value,
-              replacement.name,
-              replacement.author,
-              replacement.coverPath,
-              replacement.tags.join(','),
-              _translateTags(replacement.tags),
+              replacement.storedName,
+              replacement.storedAuthor,
+              replacement.storedCoverPath,
+              replacement.storedTags.join(','),
+              _translateTags(replacement.storedTags),
               id,
               type.value,
             ],

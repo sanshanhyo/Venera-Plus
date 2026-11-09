@@ -364,6 +364,27 @@ void main() {
   );
 
   test(
+    'archive stem and packaged member agree on a release-group title',
+    () async {
+      connectSettings();
+      const filename = '[MAX]回复宿舍重启人生[15卷完整版][China中文][1-10].zip';
+      gateway.searchResults = [subject(title: '回复宿舍重启人生')];
+      gateway.subjects[42] = gateway.searchResults.single;
+
+      final matched = await service.matchSubjectForMetadata(
+        filename.substring(0, filename.length - 4),
+        directoryTitle: 'Library',
+        fileNames: [filename],
+      );
+
+      expect(matched?.id, 42);
+      expect(gateway.personCalls, isEmpty);
+      expect(gateway.subjectCalls, [42]);
+      expect(gateway.searchKeywords.length, lessThanOrEqualTo(3));
+    },
+  );
+
+  test(
     'metadata filename cleanup handles explicit wrapping tags in either order',
     () async {
       connectSettings();

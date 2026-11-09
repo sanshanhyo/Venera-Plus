@@ -16,6 +16,7 @@ import 'package:venera_plus/foundation/context.dart';
 import 'package:venera_plus/features/local_comics/downloading_page.dart';
 import 'download.dart';
 import 'package:venera_plus/features/local_comics/local.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/foundation/log.dart';
 import 'package:venera_plus/features/comic_details/comic_details.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
@@ -75,6 +76,16 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
           : LocalManager().search(keyword);
       reconcileSelection();
     });
+  }
+
+  Future<void> completeInformation(LocalComic comic) async {
+    final changed = await showMetadataPanel(
+      context,
+      sourceKey: comic.sourceKey,
+      comicId: comic.id,
+      comicTitle: comic.title,
+    );
+    if (changed && mounted) update();
   }
 
   @override
@@ -181,6 +192,13 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
             onClick: () {
               if (isCurrent()) openComicFolder(selection.single);
             },
+          ),
+        if (selectedComics.length == 1 &&
+            supportsMetadataCompletion(selectedComics.keys.first.sourceKey))
+          MenuEntry(
+            icon: Icons.auto_fix_high_outlined,
+            text: 'Complete information'.tl,
+            onClick: () => completeInformation(selectedComics.keys.first),
           ),
         if (selectedComics.length == 1)
           MenuEntry(
@@ -536,6 +554,12 @@ class _LocalComicsPageState extends State<LocalComicsPage> {
                             context.showMessage(message: error.toString());
                           }
                         },
+                      ),
+                    if (supportsMetadataCompletion(c.sourceKey))
+                      MenuEntry(
+                        icon: Icons.auto_fix_high_outlined,
+                        text: 'Complete information'.tl,
+                        onClick: () => completeInformation(c),
                       ),
                     MenuEntry(
                       icon: Icons.menu_book_outlined,

@@ -62,17 +62,19 @@ class CloudHomeItem {
     this.fileCount,
     this.cover,
     this.bindingToken,
+    this.displayName,
   });
 
   final RemoteEntry entry;
   final CloudHomeItemKind kind;
   final int? fileCount;
   final String? cover;
+  final String? displayName;
 
   /// Opaque controller binding identity. It is never persisted or rendered.
   final Object? bindingToken;
 
-  String get name => entry.name;
+  String get name => displayName ?? entry.name;
   String get path => entry.path;
   bool get isDirectory => entry.isDirectory;
   bool get isReadable =>
@@ -85,12 +87,14 @@ class CloudHomeItem {
     int? fileCount,
     String? cover,
     Object? bindingToken,
+    String? displayName,
   }) => CloudHomeItem(
     entry: entry,
     kind: kind ?? this.kind,
     fileCount: fileCount ?? this.fileCount,
     cover: cover ?? this.cover,
     bindingToken: bindingToken ?? this.bindingToken,
+    displayName: displayName ?? this.displayName,
   );
 }
 

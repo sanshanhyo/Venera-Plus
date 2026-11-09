@@ -24,7 +24,7 @@ Future<void> _createPdfFromComic({
       : FilePath.join(localPath, comic.directory);
 
   // add cover
-  images.add(FilePath.join(baseDir, comic.cover));
+  images.add(FilePath.join(baseDir, comic.storedCover));
 
   bool multiChapters = comic.chapters != null;
 
@@ -62,8 +62,8 @@ Future<void> _createPdfFromComic({
   }
 
   var generator = PdfGenerator(
-    title: comic.title,
-    author: comic.subtitle,
+    title: comic.storedTitle,
+    author: comic.storedSubtitle,
     imagePaths: images,
     outputPath: savePath,
     decodeImage: decodeImage,

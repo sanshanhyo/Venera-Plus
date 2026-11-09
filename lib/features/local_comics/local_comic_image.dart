@@ -1,8 +1,11 @@
+import 'dart:async' show unawaited;
+import 'package:dio/dio.dart';
 import 'dart:async' show Future;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
 import 'package:venera_plus/features/local_comics/local.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/foundation/image_provider/base_image_provider.dart';
 import 'package:venera_plus/foundation/file_system.dart';
 import 'local_comic_image.dart' as image_provider;
@@ -12,12 +15,32 @@ class LocalComicImageProvider
   /// Image provider for normal image.
   ///
   /// [url] is the url of the image. Local file path is also supported.
-  const LocalComicImageProvider(this.comic);
+  LocalComicImageProvider(this.comic) : _cover = comic.cover;
 
   final LocalComic comic;
+  final String _cover;
 
   @override
   Future<Uint8List> load(chunkEvents, checkStop) async {
+    if (_cover.startsWith('$metadataCoverScheme:')) {
+      final cancelToken = CancelToken();
+      unawaited(
+        BaseImageProvider.cancelSignalOf(
+          checkStop,
+        ).then((_) => cancelToken.cancel()),
+      );
+      try {
+        final bytes = await MetadataService().loadCoverKey(
+          _cover,
+          cancelToken: cancelToken,
+        );
+        checkStop();
+        return bytes;
+      } catch (_) {
+        checkStop();
+        rethrow;
+      }
+    }
     File? file = comic.coverFile;
     if (!await file.exists()) {
       file = null;
@@ -44,7 +67,7 @@ class LocalComicImageProvider
   }
 
   @override
-  String get key => "local${comic.id}${comic.comicType.value}";
+  String get key => "local${comic.id}${comic.comicType.value}:$_cover";
 }
 
 Future<File?> _inferCover(Directory directory) async {

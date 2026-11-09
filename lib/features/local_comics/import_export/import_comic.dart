@@ -542,15 +542,16 @@ class ImportComic {
           result[favoriteFolder]!.add(
             LocalComic(
               id: c.id,
-              title: c.title,
-              subtitle: c.subtitle,
-              tags: c.tags,
+              title: c.storedTitle,
+              subtitle: c.storedSubtitle,
+              tags: c.storedTags,
               directory: pathMap[c.directory]!,
               chapters: c.chapters,
-              cover: c.cover,
+              cover: c.storedCover,
               comicType: c.comicType,
               downloadedChapters: c.downloadedChapters,
               createdAt: c.createdAt,
+              incompleteChapters: c.incompleteChapters,
             ),
           );
         }
@@ -605,11 +606,11 @@ class ImportComic {
           folder,
           FavoriteItem(
             id: id,
-            name: comic.title,
-            coverPath: comic.cover,
-            author: comic.subtitle,
+            name: comic.storedTitle,
+            coverPath: comic.storedCover,
+            author: comic.storedSubtitle,
             type: comic.comicType,
-            tags: comic.tags,
+            tags: comic.storedTags,
             favoriteTime: comic.createdAt,
           ),
         );

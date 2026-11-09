@@ -15,6 +15,7 @@ import 'package:venera_plus/foundation/file_interaction.dart';
 import 'package:venera_plus/foundation/log.dart';
 import 'package:venera_plus/foundation/translations.dart';
 import 'package:venera_plus/foundation/widget_utils.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 
 /// Open a dialog to create a new favorite folder.
 Future<String?> newFolder() {
@@ -130,18 +131,7 @@ void addFavorite(List<Comic> comics) {
                     for (var comic in comics) {
                       LocalFavoritesManager().addComic(
                         selectedFolder!,
-                        FavoriteItem(
-                          id: comic.id,
-                          name: comic.title,
-                          coverPath: comic.cover,
-                          author: comic.subtitle ?? '',
-                          type: ComicType(
-                            (comic.sourceKey == 'local'
-                                ? 0
-                                : comic.sourceKey.hashCode),
-                          ),
-                          tags: comic.tags ?? [],
-                        ),
+                        FavoriteItem.fromComic(comic),
                       );
                     }
                     context.pop();
@@ -169,7 +159,9 @@ Future<List<FavoriteItem>> updateComicsInfo(String folder) async {
         var comicSource = c.type.comicSource;
         if (comicSource == null) return;
 
-        var newInfo = (await comicSource.loadComicInfo!(c.id)).data;
+        var newInfo = MetadataStore.originalDetails(
+          (await comicSource.loadComicInfo!(c.id)).data,
+        );
 
         var newTags = <String>[];
         for (var entry in newInfo.tags.entries) {
@@ -190,7 +182,7 @@ Future<List<FavoriteItem>> updateComicsInfo(String folder) async {
           author:
               newInfo.subTitle ??
               newInfo.tags['author']?.firstOrNull ??
-              c.author,
+              c.storedAuthor,
           type: c.type,
           tags: newTags,
         );

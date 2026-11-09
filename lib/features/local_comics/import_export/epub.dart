@@ -208,7 +208,7 @@ Future<File> createEpubWithLocalComic(
   }
   var chapters = <String, List<File>>{};
   if (comic.chapters == null) {
-    chapters[comic.title] = (await LocalManager().getImages(
+    chapters[comic.storedTitle] = (await LocalManager().getImages(
       comic.id,
       comic.comicType,
       0,
@@ -223,8 +223,8 @@ Future<File> createEpubWithLocalComic(
     }
   }
   var data = EpubData(
-    title: comic.title,
-    author: comic.subtitle,
+    title: comic.storedTitle,
+    author: comic.storedSubtitle,
     cover: comic.coverFile,
     chapters: chapters,
   );

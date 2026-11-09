@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/widgets.dart' show ChangeNotifier;
 import 'package:flutter_saf/flutter_saf.dart';
 import 'package:venera_plus/features/comic_storage/comic_storage.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
@@ -98,8 +99,13 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
 
   final String comicId;
 
-  /// comic details. If null, the comic details will be fetched from the source.
-  ComicDetails? comic;
+  /// Original details used for persisted tasks and downloaded files.
+  /// Display-only metadata remains in the per-comic overlay store.
+  ComicDetails? _comic;
+  ComicDetails? get comic => _comic;
+  set comic(ComicDetails? value) {
+    _comic = value == null ? null : MetadataStore.originalDetails(value);
+  }
 
   /// chapters to download. If null, all chapters will be downloaded.
   final List<String>? chapters;
@@ -115,11 +121,12 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
   ImagesDownloadTask({
     required this.source,
     required this.comicId,
-    this.comic,
+    ComicDetails? comic,
     this.chapters,
     this.comicTitle,
     bool? skipUnavailableImages,
-  }) : skipUnavailableImages =
+  }) : _comic = comic == null ? null : MetadataStore.originalDetails(comic),
+       skipUnavailableImages =
            skipUnavailableImages ??
            appdata.settings['skipUnavailableDownloadImages'] == true;
 
@@ -915,7 +922,8 @@ class ArchiveDownloadTask extends DownloadTask {
   /// Download comic by archive url
   ///
   /// Currently only support zip file and comics without chapters
-  ArchiveDownloadTask(this.archiveUrl, this.comic) {
+  ArchiveDownloadTask(this.archiveUrl, ComicDetails comic)
+    : comic = MetadataStore.originalDetails(comic) {
     source = ComicSource.find(comic.sourceKey)!;
   }
 

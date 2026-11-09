@@ -8,6 +8,7 @@ import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
 import 'package:venera_plus/features/follow_updates/follow_update_queue.dart';
 import 'package:venera_plus/features/follow_updates/follow_updates.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/foundation/cache_manager.dart';
@@ -116,6 +117,75 @@ void main() {
     group(
       'real scoped metadata refresh',
       () {
+        test(
+          'refresh persists source fields underneath a metadata override',
+          () async {
+            ComicSourceManager().add(
+              _source(
+                sourceKey,
+                loadComicInfo: (id) async {
+                  final raw = ComicDetails.fromJson({
+                    ..._details(sourceKey, id).toJson(),
+                    'subtitle': null,
+                    'chapters': {'one': 'One', 'two': 'Two'},
+                    'chapterPageCounts': {'one': 3, 'two': 4},
+                  });
+                  return Res(MetadataStore.applyAppDetails(raw));
+                },
+              ),
+            );
+            await _withLiveFavorites((manager) async {
+              final item = _tracked(sourceKey, 'overlaid');
+              manager.addComic('在读', item, null, _oldSnapshot);
+              final metadata = MetadataStore.app;
+              metadata.save(
+                MetadataBinding(
+                  sourceKey: sourceKey,
+                  comicId: item.id,
+                  result: MetadataResult(
+                    reference: const MetadataReference(
+                      provider: MetadataProviderId.jmcomic,
+                      id: '123',
+                      sourceUrl: 'https://example.com/album/123',
+                    ),
+                    title: 'Visible title',
+                    authors: const ['Visible author'],
+                    coverUrl: 'https://example.com/visible-cover.jpg',
+                  ),
+                  cacheCover: false,
+                  updatedAt: DateTime.utc(2026, 11, 9),
+                ),
+              );
+              final result = await updateComic(
+                manager.getComicWithUpdatesInfo('在读', item.id, item.type),
+                '在读',
+              );
+              expect(result.errorMessage, isNull);
+              var refreshed = manager.getComicWithUpdatesInfo(
+                '在读',
+                item.id,
+                item.type,
+              );
+              expect(refreshed.title, 'Visible title');
+              expect(refreshed.storedName, 'Fresh title');
+              expect(refreshed.storedAuthor, 'Old author');
+              expect(refreshed.storedCoverPath, 'fresh.jpg');
+              expect(refreshed.storedTags, ['genre:fresh']);
+              expect(refreshed.updateTime, _newTime);
+              expect(refreshed.lastCheckTime, isNotNull);
+              metadata.remove(sourceKey, item.id);
+              refreshed = manager.getComicWithUpdatesInfo(
+                '在读',
+                item.id,
+                item.type,
+              );
+              expect(refreshed.title, 'Fresh title');
+              expect(refreshed.author, 'Old author');
+              expect(refreshed.cover, 'fresh.jpg');
+            });
+          },
+        );
+
         test(
           'overlapping consumers fetch once and apply fresh metadata to all memberships',
           () async {
@@ -897,6 +967,7 @@ Future<void> _withLiveFavorites(
       await manager.waitForPendingReads();
       manager.close();
     }
+    MetadataStore.resetForTesting();
     await CacheManager.resetForTesting();
     LocalFavoritesManager.cache = oldManager;
     (appdata.toJson()['settings'] as Map)

@@ -228,6 +228,11 @@ Flutter 3.41.4 的 Android Release 构建不要添加 `--no-pub`：该参数还�
 
 签名文件和密码属于敏感信息，不应提交到仓库。
 
+### EH/JM 元数据验证
+
+`metadata_validation.yml` 的 Android 场景使用合成资料和生成的封面验证界面、SQLite 保存和移除恢复，默认不访问 EH/JM 真实站点。手动或复用 `build.yml` 时，可设置 `metadata_validation: true` 运行此场景；`metadata_capture_screenshots` 默认开启。实际网络连通检查需要手动触发，并明确开启 `metadata_check_connectivity`（直接触发元数据工作流时为 `check_connectivity`）。真实目标从可选的 `metadata_options` 读取；未提供目标时只检查站点连通，不查询漫画条目。自动分支构建与可复用调用默认均不执行真实网络检查。
+
+
 ## 桌面端与 iOS 构建
 
 在对应操作系统和原生工具链就绪后执行：

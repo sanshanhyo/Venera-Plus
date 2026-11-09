@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:venera_plus/features/cloud_home/cloud_home_cache.dart';
 import 'package:venera_plus/features/cloud_home/cloud_home_controller.dart';
 import 'package:venera_plus/features/cloud_home/cloud_home_source.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/network/remote_storage/remote_storage.dart';
@@ -71,6 +72,7 @@ void main() {
     }
     controllers.clear();
     storage.dispose();
+    MetadataStore.resetForTesting();
     await temporary.delete(recursive: true);
   });
 
@@ -147,6 +149,89 @@ void main() {
       CloudHomeItemKind.directory,
     );
   });
+
+  test(
+    'metadata changes update home immediately and removal restores names without remote writes',
+    () async {
+      final remote = _Store({
+        '/Comic/': [_file('/Comic/book.pdf')],
+      });
+      final controller = create(remote);
+      await controller.initialize();
+      final metadata = MetadataStore.app;
+      metadata.save(
+        MetadataBinding(
+          sourceKey: controller.sourceKey,
+          comicId: '/Comic/book.pdf',
+          result: MetadataResult(
+            reference: const MetadataReference(
+              provider: MetadataProviderId.jmcomic,
+              id: '12345',
+              sourceUrl: 'https://jm.example/album/12345/',
+            ),
+            title: 'Matched sample title',
+            coverUrl: 'https://covers.example/sample.jpg',
+          ),
+          cacheCover: false,
+          updatedAt: DateTime(2026),
+        ),
+      );
+      expect(controller.items.single.name, 'Matched sample title');
+      expect(controller.items.single.path, '/Comic/book.pdf');
+      expect(
+        controller.items.single.cover,
+        startsWith('$metadataCoverScheme:'),
+      );
+      expect(remote.calls, ['/Comic/']);
+      metadata.remove(controller.sourceKey, '/Comic/book.pdf');
+      expect(controller.items.single.name, 'book.pdf');
+      expect(controller.items.single.cover, isNull);
+      expect(controller.items.single.path, '/Comic/book.pdf');
+      expect(remote.calls, ['/Comic/']);
+    },
+  );
+
+  test(
+    'legacy canonical metadata updates the shelf without changing binding or path',
+    () async {
+      final remote = _Store({
+        '/Comic/': [_file('/Comic/book.pdf')],
+      });
+      final controller = _CanonicalController(
+        accounts: storage,
+        store: remote,
+        cache: CloudHomeDirectoryCache(
+          directoryPath: '${temporary.path}/canonical-cache',
+        ),
+      );
+      controllers.add(controller);
+      await controller.initialize();
+      final binding = controller.items.single.bindingToken;
+      MetadataStore.app.save(
+        MetadataBinding(
+          sourceKey: controller.sourceKey,
+          comicId: 'book.pdf',
+          result: MetadataResult(
+            reference: const MetadataReference(
+              provider: MetadataProviderId.jmcomic,
+              id: '12345',
+              sourceUrl: 'https://jm.example/album/12345/',
+            ),
+            title: 'Canonical title. Part 2',
+          ),
+          cacheCover: false,
+          updatedAt: DateTime(2026),
+        ),
+      );
+      expect(controller.items.single.name, 'Canonical title. Part 2');
+      expect(controller.items.single.entry.name, 'book.pdf');
+      expect(controller.items.single.path, '/Comic/book.pdf');
+      expect(identical(controller.items.single.bindingToken, binding), isTrue);
+      MetadataStore.app.remove(controller.sourceKey, 'book.pdf');
+      expect(controller.items.single.name, 'book.pdf');
+      expect(remote.calls, ['/Comic/']);
+    },
+  );
 
   test('pure image leaves remain readable; mixed image trees stay folders', () {
     expect(
@@ -865,6 +950,24 @@ Future<void> _untilController(
   return completed.future.whenComplete(
     () => controller.removeListener(changed),
   );
+}
+
+class _CanonicalController extends CloudHomeController {
+  _CanonicalController({
+    required RemoteStorageAccounts accounts,
+    required RemoteFileStore store,
+    required CloudHomeDirectoryCache cache,
+  }) : super(
+         accounts: accounts,
+         storeFactory: (_) => store,
+         cache: cache,
+         ensureSource: (library) async => library.sourceKey,
+         preloadComic: (_, _) async => null,
+       );
+
+  @override
+  String comicIdFor(String path) =>
+      path.startsWith('/Comic/') ? path.substring('/Comic/'.length) : path;
 }
 
 class _Store implements RemoteFileStore {

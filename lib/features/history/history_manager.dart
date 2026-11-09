@@ -18,6 +18,28 @@ import 'package:venera_plus/foundation/translations.dart';
 import 'package:venera_plus/foundation/sync_records.dart';
 import 'package:venera_plus/features/history/history_sync_data.dart';
 import 'package:venera_plus/features/history/reading_progress.dart';
+import 'package:venera_plus/features/local_comics/local_comics.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
+
+HistoryMixin _originalHistoryModel(HistoryMixin model) =>
+    model is ComicDetails ? MetadataStore.originalDetails(model) : model;
+
+String _storedHistoryTitle(HistoryMixin model) {
+  final original = _originalHistoryModel(model);
+  return original is LocalComic ? original.storedTitle : original.title;
+}
+
+String _storedHistorySubtitle(HistoryMixin model) {
+  final original = _originalHistoryModel(model);
+  return original is LocalComic
+      ? original.storedSubtitle
+      : original.subTitle ?? '';
+}
+
+String _storedHistoryCover(HistoryMixin model) {
+  final original = _originalHistoryModel(model);
+  return original is LocalComic ? original.storedCover : original.cover;
+}
 
 class History implements Comic {
   HistoryType type;
@@ -25,13 +47,35 @@ class History implements Comic {
   DateTime time;
 
   @override
-  String title;
+  String get title => _metadata?.result.title ?? _title;
+  set title(String value) => _title = value;
+  String _title;
 
   @override
-  String subtitle;
+  String get subtitle {
+    final authors = _metadata?.result.authors;
+    return authors?.isNotEmpty == true ? authors!.join(', ') : _subtitle;
+  }
+
+  set subtitle(String value) => _subtitle = value;
+  String _subtitle;
 
   @override
-  String cover;
+  String get cover {
+    final metadata = _metadata;
+    return metadata == null
+        ? _cover
+        : MetadataStore.appOrNull?.coverKey(metadata) ?? _cover;
+  }
+
+  set cover(String value) => _cover = value;
+  String _cover;
+
+  MetadataBinding? get _metadata => MetadataStore.lookupApp(sourceKey, id);
+
+  String get storedTitle => _title;
+  String get storedSubtitle => _subtitle;
+  String get storedCover => _cover;
 
   /// index of chapters. 1-based.
   int ep;
@@ -73,9 +117,9 @@ class History implements Comic {
     this.readDurationMs = 0,
     this.readingProgress,
   }) : type = model.historyType,
-       title = model.title,
-       subtitle = model.subTitle ?? '',
-       cover = model.cover,
+       _title = _storedHistoryTitle(model),
+       _subtitle = _storedHistorySubtitle(model),
+       _cover = _storedHistoryCover(model),
        id = model.id,
        readEpisode = readChapters ?? <String>{},
        time = time ?? DateTime.now();
@@ -85,9 +129,9 @@ class History implements Comic {
   History._copy(History other)
     : type = other.type,
       time = other.time,
-      title = other.title,
-      subtitle = other.subtitle,
-      cover = other.cover,
+      _title = other.storedTitle,
+      _subtitle = other.storedSubtitle,
+      _cover = other.storedCover,
       ep = other.ep,
       page = other.page,
       group = other.group,
@@ -103,9 +147,9 @@ class History implements Comic {
   History.fromMap(Map<String, dynamic> map)
     : type = HistoryType(map["type"]),
       time = DateTime.fromMillisecondsSinceEpoch(map["time"]),
-      title = map["title"] ?? '',
-      subtitle = map["subtitle"] ?? '',
-      cover = map["cover"] ?? '',
+      _title = map["title"] ?? '',
+      _subtitle = map["subtitle"] ?? '',
+      _cover = map["cover"] ?? '',
       ep = (map["ep"] as num?)?.toInt() ?? 0,
       page = (map["page"] as num?)?.toInt() ?? 0,
       id = map["id"],
@@ -127,9 +171,9 @@ class History implements Comic {
   History.fromRow(Row row)
     : type = HistoryType(row["type"]),
       time = DateTime.fromMillisecondsSinceEpoch(row["time"]),
-      title = row["title"] ?? '',
-      subtitle = row["subtitle"] ?? '',
-      cover = row["cover"] ?? '',
+      _title = row["title"] ?? '',
+      _subtitle = row["subtitle"] ?? '',
+      _cover = row["cover"] ?? '',
       ep = row["ep"],
       page = row["page"],
       id = row["id"],
@@ -234,9 +278,13 @@ class History implements Comic {
   String? get language => null;
 
   @override
-  String get sourceKey => type == ComicType.local
-      ? 'local'
-      : type.comicSource?.key ?? "Unknown:${type.value}";
+  String get sourceKey {
+    try {
+      return type.sourceKey;
+    } on StateError {
+      return type.comicSource?.key ?? "Unknown:${type.value}";
+    }
+  }
 
   @override
   double? get stars => null;
@@ -315,6 +363,11 @@ class HistoryManager with ChangeNotifier {
   Future<void> Function()? debugBeforeAsyncHistoryResultApplied;
 
   bool isInitialized = false;
+  MetadataStore? _metadataStore;
+
+  void _onMetadataChanged() {
+    if (isInitialized) notifyListeners();
+  }
 
   Future<void> init() async {
     if (isInitialized) {
@@ -333,6 +386,8 @@ class HistoryManager with ChangeNotifier {
       (appdata.settings['historyRetentionDays'] as num?)?.round() ?? 0,
     );
     isInitialized = true;
+    _metadataStore = MetadataStore.appOrNull;
+    _metadataStore?.addListener(_onMetadataChanged);
   }
 
   static ReadingProgress _progressForHistory(History item) {
@@ -424,9 +479,9 @@ class HistoryManager with ChangeNotifier {
         ''',
         [
           item.id,
-          item.title,
-          item.subtitle,
-          item.cover,
+          item.storedTitle,
+          item.storedSubtitle,
+          item.storedCover,
           time,
           item.type.value,
           ep,
@@ -473,9 +528,9 @@ class HistoryManager with ChangeNotifier {
         ''',
         [
           item.id,
-          item.title,
-          item.subtitle,
-          item.cover,
+          item.storedTitle,
+          item.storedSubtitle,
+          item.storedCover,
           time,
           item.type.value,
           position?.ep ?? item.ep,
@@ -1398,6 +1453,8 @@ class HistoryManager with ChangeNotifier {
       _writeHistory(_db, item);
     }
     isInitialized = false;
+    _metadataStore?.removeListener(_onMetadataChanged);
+    _metadataStore = null;
     _historyCacheEpoch++;
     _db.dispose();
   }
@@ -1476,7 +1533,7 @@ class HistoryManager with ChangeNotifier {
           continue;
         }
 
-        var comicDetails = res.data;
+        var comicDetails = MetadataStore.originalDetails(res.data);
         // Update history info while keeping reading progress
         var updatedHistory = History.fromMap({
           'type': history.type.value,

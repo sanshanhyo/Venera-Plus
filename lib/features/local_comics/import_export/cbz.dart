@@ -362,9 +362,9 @@ abstract class CBZ {
       FilePath.join(cache.path, 'cover.${cover.path.split('.').last}'),
     );
     final metaData = ComicMetaData(
-      title: comic.title,
-      author: comic.subtitle,
-      tags: comic.tags,
+      title: comic.storedTitle,
+      author: comic.storedSubtitle,
+      tags: comic.storedTags,
       chapters: chapters,
     );
     await File(

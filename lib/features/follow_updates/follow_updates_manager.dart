@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:venera_plus/features/comic_source/comic_source.dart';
 import 'package:venera_plus/features/favorites/favorites.dart';
+import 'package:venera_plus/features/metadata/metadata.dart';
 import 'package:venera_plus/foundation/comic_type.dart';
 import 'package:venera_plus/foundation/log.dart';
 import 'package:venera_plus/foundation/translations.dart';
@@ -88,11 +89,13 @@ Future<ComicRefreshResult> _refreshComic(
       fallbackAuthor ??
       (folders.isEmpty
           ? null
-          : manager.getComic(folders.first, id, type).author);
+          : manager.getComic(folders.first, id, type).storedAuthor);
   final ComicDetails info;
   try {
     // Source loaders already handle transient read failures.
-    info = (await source.loadComicInfoForReading(id, refresh: true)).data;
+    info = MetadataStore.originalDetails(
+      (await source.loadComicInfoForReading(id, refresh: true)).data,
+    );
   } catch (e, s) {
     Log.error('Check Updates', e, s);
     return ComicRefreshResult(ComicUpdateCheckStatus.unknown, e.toString());
@@ -153,10 +156,10 @@ Future<ComicRefreshResult> _refreshComic(
   var metadataChanged = false;
   for (final folder in memberships) {
     final previous = manager.getComic(folder, id, type);
-    if (previous.name != item.name ||
-        previous.author != item.author ||
-        previous.coverPath != item.coverPath ||
-        !listEquals(previous.tags, item.tags)) {
+    if (previous.storedName != item.storedName ||
+        previous.storedAuthor != item.storedAuthor ||
+        previous.storedCoverPath != item.storedCoverPath ||
+        !listEquals(previous.storedTags, item.storedTags)) {
       metadataChanged = true;
       break;
     }
@@ -193,7 +196,7 @@ Future<ComicUpdateResult> updateComic(
       'Favorites changed during refresh. Refresh again.',
     );
   }
-  return refreshComic(comic.id, comic.type, fallbackAuthor: comic.author);
+  return refreshComic(comic.id, comic.type, fallbackAuthor: comic.storedAuthor);
 }
 
 class UpdateProgress {
@@ -349,7 +352,7 @@ Future<void> _runFolderUpdate(
             ? await refreshComic(
                 comic.id,
                 comic.type,
-                fallbackAuthor: comic.author,
+                fallbackAuthor: comic.storedAuthor,
               )
             : ComicRefreshResult(
                 ComicUpdateCheckStatus.unknown,

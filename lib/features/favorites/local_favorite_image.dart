@@ -20,17 +20,21 @@ class LocalFavoriteImageProvider
   final int intKey;
 
   static void delete(String id, int intKey) {
-    var fileName = (id + intKey.toString()).hashCode.toString();
-    var file = File(FilePath.join(App.dataPath, 'favorite_cover', fileName));
-    if (file.existsSync()) {
-      file.delete();
+    final identity = (id + intKey.toString()).hashCode.toString();
+    final directory = Directory(FilePath.join(App.dataPath, 'favorite_cover'));
+    if (!directory.existsSync()) return;
+    for (final file in directory.listSync().whereType<File>()) {
+      final name = file.name;
+      if (name == identity || name.startsWith('$identity-')) {
+        file.deleteSync();
+      }
     }
   }
 
   @override
   Future<Uint8List> load(chunkEvents, checkStop) async {
     var sourceKey = ComicSource.fromIntKey(intKey)?.key;
-    var fileName = key.hashCode.toString();
+    var fileName = '${(id + intKey.toString()).hashCode}-${url.hashCode}';
     var file = File(FilePath.join(App.dataPath, 'favorite_cover', fileName));
     if (await file.exists()) {
       return await file.readAsBytes();
@@ -69,5 +73,5 @@ class LocalFavoriteImageProvider
   }
 
   @override
-  String get key => id + intKey.toString();
+  String get key => '${id.length}:$id:$intKey:$url';
 }

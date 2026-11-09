@@ -595,15 +595,16 @@ class _CloudHomeViewState extends State<CloudHomeView> {
   }
 
   String _title(CloudHomeItem item) =>
-      item.isDirectory ? item.name : comicFileStem(item.name);
+      item.displayName ??
+      (item.isDirectory ? item.entry.name : comicFileStem(item.entry.name));
 
   String _fileType(CloudHomeItem item) => switch (item.kind) {
     CloudHomeItemKind.directory => 'Folder'.tl,
     CloudHomeItemKind.pdfCollection => 'PDF',
     CloudHomeItemKind.imageComic => 'Images'.tl,
     _ =>
-      item.name.contains('.')
-          ? item.name.split('.').last.toUpperCase()
+      item.entry.name.contains('.')
+          ? item.entry.name.split('.').last.toUpperCase()
           : 'File'.tl,
   };
 

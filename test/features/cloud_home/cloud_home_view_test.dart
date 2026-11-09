@@ -152,6 +152,34 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'metadata title keeps dots while type and route use the original file',
+    (tester) async {
+      final controller = _BrowserController()
+        ..customItems = const [
+          CloudHomeItem(
+            entry: RemoteEntry(
+              name: 'original.pdf',
+              path: '/Comic/original.pdf',
+              isDirectory: false,
+            ),
+            kind: CloudHomeItemKind.comicFile,
+            displayName: 'Manual title. Edition 2',
+          ),
+        ];
+      String? opened;
+      await _show(tester, controller, onOpenComic: (_, id) => opened = id);
+      expect(find.text('Manual title. Edition 2'), findsOneWidget);
+      expect(find.text('PDF'), findsOneWidget);
+      expect(find.text('EDITION 2'), findsNothing);
+      await tester.tap(find.text('Manual title. Edition 2'));
+      await tester.pumpAndSettle();
+      expect(opened, 'canonical:/Comic/original.pdf');
+      expect(controller.items.single.path, '/Comic/original.pdf');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('changing screen size keeps the current first entry visible', (
     tester,
   ) async {

@@ -64,7 +64,7 @@ class DataSync with ChangeNotifier {
 
   DataSync._() {
     appdata.registerSyncDataRequestHandler(({domains}) => onDataChanged());
-    LocalFavoritesManager().addListener(onDataChanged);
+    _favoritesManager.addDataListener(onDataChanged);
     ComicSourceManager().addListener(onDataChanged);
     checkForAutomaticSync(startup: true);
     if (App.isDesktop && !debugDisableWindowCloseHandler) {
@@ -75,6 +75,8 @@ class DataSync with ChangeNotifier {
       });
     }
   }
+
+  final LocalFavoritesManager _favoritesManager = LocalFavoritesManager();
 
   void onDataChanged() {
     // Import notifications describe the downloaded snapshot, not local edits.
@@ -427,7 +429,7 @@ class DataSync with ChangeNotifier {
     _disposed = true;
     _scheduleTimer?.cancel();
     appdata.registerSyncDataRequestHandler(null);
-    LocalFavoritesManager().removeListener(onDataChanged);
+    _favoritesManager.removeDataListener(onDataChanged);
     ComicSourceManager().removeListener(onDataChanged);
     unawaited(_activeStore?.cancelAll() ?? Future.value());
     super.dispose();

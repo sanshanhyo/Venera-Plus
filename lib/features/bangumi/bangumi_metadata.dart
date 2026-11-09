@@ -76,6 +76,9 @@ class BangumiMetadataHints {
     caseSensitive: false,
   );
   static final _releaseGroup = RegExp(r'^[A-Z][A-Z0-9 ._-]{1,31}$');
+  static final _bracketMarker = RegExp(
+    r'(?:\[([^\[\]]+)\]|【([^【】]+)】|\(([^()]+)\))',
+  );
   static final _magazine = RegExp(r'雑誌|雜誌|杂志');
   static final _issue = RegExp(
     r'((?:19|20)\d{2})\s*年\s*(0?[1-9]|1[0-2])\s*月\s*[号號]',
@@ -205,9 +208,17 @@ class BangumiMetadataHints {
     Set<String>? explicitAuthors,
   }) {
     var remaining = width(value).trim();
+    final archiveFile = _archiveExtension.hasMatch(remaining);
+    final releasePackaging = _bracketMarker.allMatches(remaining).any((match) {
+      final marker = (match[1] ?? match[2] ?? match[3]!).replaceAll(
+        RegExp(r'\s+'),
+        '',
+      );
+      return _noise.hasMatch(marker) || _volumePackage.hasMatch(marker);
+    });
     // A top-level work hint may itself be an archive filename. Keep this
     // separate from member parsing, whose creator and volume evidence matters.
-    final archiveTitle = !isFile && _archiveExtension.hasMatch(remaining);
+    final archiveTitle = !isFile && archiveFile;
     if (archiveTitle) {
       remaining = remaining.replaceFirst(_archiveExtension, '');
     }
@@ -304,7 +315,8 @@ class BangumiMetadataHints {
     final creator = _creatorPrefix.firstMatch(candidate);
     if (creator != null) {
       final creatorName = creator[1] ?? creator[2]!;
-      if (archiveTitle && _releaseGroup.hasMatch(creatorName)) {
+      if (_releaseGroup.hasMatch(creatorName) &&
+          (archiveTitle || releasePackaging && (archiveFile || !isFile))) {
         // A distribution prefix may also be part of the actual title. Keep
         // both names so different exact subjects remain ambiguous.
         add(remaining);
