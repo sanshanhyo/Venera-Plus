@@ -18,6 +18,16 @@ permissions:
   contents: read
 
 jobs:
+  metadata_smoke:
+    name: EH/JM 合成元数据界面验证
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/integrate-cloud-home-metadata' }}
+    uses: ./.github/workflows/metadata_validation.yml
+    with:
+      capture_screenshots: true
+      check_connectivity: false
+      eh_gallery_url: ''
+      jm_reference: ''
+
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -92,7 +102,7 @@ jobs:
           retention-days: 14
 
   analyze:
-    needs: [checks, tests]
+    needs: [checks, tests, metadata_smoke]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -101,9 +111,15 @@ jobs:
         env:
           CHECKS_RESULT: ${{ needs.checks.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
+          METADATA_SMOKE_REQUIRED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/feat/integrate-cloud-home-metadata' }}
+          METADATA_SMOKE_RESULT: ${{ needs.metadata_smoke.result }}
         run: |
           if [[ "$CHECKS_RESULT" != "success" || "$TESTS_RESULT" != "success" ]]; then
             echo "质量检查未通过：checks=$CHECKS_RESULT tests=$TESTS_RESULT"
+            exit 1
+          fi
+          if [[ "$METADATA_SMOKE_REQUIRED" == "true" && "$METADATA_SMOKE_RESULT" != "success" ]]; then
+            echo "合成元数据界面验证未通过：metadata_smoke=$METADATA_SMOKE_RESULT"
             exit 1
           fi
       - uses: actions/checkout@v7

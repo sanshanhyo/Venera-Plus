@@ -21,6 +21,7 @@ import 'package:venera_plus/features/metadata/metadata_panel.dart';
 import 'package:venera_plus/features/metadata/metadata_providers.dart';
 import 'package:venera_plus/features/metadata/metadata_service.dart';
 import 'package:venera_plus/features/metadata/metadata_store.dart';
+import 'package:venera_plus/foundation/app.dart';
 import 'package:venera_plus/foundation/appdata.dart';
 import 'package:venera_plus/foundation/comic_type.dart';
 import 'package:venera_plus/foundation/translations.dart';
@@ -64,23 +65,83 @@ void main() {
         const Duration(seconds: 15),
       );
 
+      ({bool ready, Rect? viewport, String details}) keyboardViewport() {
+        final platformInset = tester.view.viewInsets.bottom;
+        final rootMedia = MediaQuery.of(App.rootContext);
+        final panel = find.byType(MetadataPanel);
+        final panelElements = panel.evaluate();
+        final panelMedia = panelElements.isEmpty
+            ? null
+            : MediaQuery.of(panelElements.single);
+        final viewport = panelElements.isEmpty
+            ? null
+            : tester.getRect(
+                find.descendant(
+                  of: panel,
+                  matching: find.byType(SingleChildScrollView),
+                ),
+              );
+        // SideBarRoute consumes the root safe padding below this full-height
+        // panel. Its child MediaQuery has already removed the keyboard inset.
+        final expectedBottom =
+            tester.getRect(find.byKey(repaintKey)).bottom -
+            rootMedia.padding.bottom;
+        final editing = tester
+            .widgetList<EditableText>(find.byType(EditableText))
+            .any((field) => field.focusNode.hasFocus);
+        return (
+          ready:
+              !editing &&
+              platformInset == 0 &&
+              rootMedia.viewInsets.bottom == 0 &&
+              (panelMedia?.viewInsets.bottom ?? 0) == 0 &&
+              (viewport == null || viewport.bottom == expectedBottom),
+          viewport: viewport,
+          details:
+              'platformInset=$platformInset, '
+              'rootInset=${rootMedia.viewInsets.bottom}, '
+              'panelInset=${panelMedia?.viewInsets.bottom}, '
+              'viewport=$viewport, expectedBottom=$expectedBottom, '
+              'editing=$editing',
+        );
+      }
+
       Future<void> dismissKeyboard() async {
         FocusManager.instance.primaryFocus?.unfocus();
+        // Let EditableText close its connection before clearing Android's
+        // native client; queued show requests can otherwise arrive after hide.
         await tester.pump();
-        // Integration tests use Android's real IME. Unfocus/pumpAndSettle
-        // alone can finish before its asynchronous viewport resize arrives.
+        await SystemChannels.textInput.invokeMethod<void>(
+          'TextInput.clearClient',
+        );
         await SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
-        var zeroInsetFrames = 0;
+        var restoredFrames = 0;
+        Rect? previousViewport;
+        var metrics = keyboardViewport();
         for (var attempt = 0; attempt < 60; attempt++) {
           await tester.pump(const Duration(milliseconds: 100));
-          final insets = tester.view.viewInsets;
-          zeroInsetFrames = insets.bottom == 0 ? zeroInsetFrames + 1 : 0;
-          if (zeroInsetFrames >= 3) {
+          metrics = keyboardViewport();
+          restoredFrames = metrics.ready
+              ? metrics.viewport == previousViewport
+                    ? restoredFrames + 1
+                    : 1
+              : 0;
+          previousViewport = metrics.viewport;
+          if (restoredFrames >= 10) {
             await settle();
-            return;
+            final settled = keyboardViewport();
+            if (settled.ready && settled.viewport == metrics.viewport) return;
+            metrics = settled;
+            restoredFrames = 0;
+          }
+          if (!metrics.ready) {
+            await SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
           }
         }
-        fail('Android keyboard did not restore the full screenshot viewport.');
+        fail(
+          'Android keyboard did not restore the full screenshot viewport: '
+          '${metrics.details}',
+        );
       }
 
       Future<void> capture(String name, {bool checkErrors = true}) async {
