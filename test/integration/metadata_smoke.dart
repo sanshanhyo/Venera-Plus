@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -65,6 +66,16 @@ void main() {
         const Duration(seconds: 15),
       );
 
+      bool sameViewport(Rect? first, Rect? second) {
+        if (first == null || second == null) return first == second;
+        // Synchronization ignores only Flutter's calculation noise. Scene
+        // visibility assertions below retain their original strict bounds.
+        return (first.left - second.left).abs() <= precisionErrorTolerance &&
+            (first.top - second.top).abs() <= precisionErrorTolerance &&
+            (first.right - second.right).abs() <= precisionErrorTolerance &&
+            (first.bottom - second.bottom).abs() <= precisionErrorTolerance;
+      }
+
       ({bool ready, Rect? viewport, String details}) keyboardViewport() {
         final platformInset = tester.view.viewInsets.bottom;
         final rootMedia = MediaQuery.of(App.rootContext);
@@ -86,6 +97,9 @@ void main() {
         final expectedBottom =
             tester.getRect(find.byKey(repaintKey)).bottom -
             rootMedia.padding.bottom;
+        final bottomDelta = viewport == null
+            ? null
+            : viewport.bottom - expectedBottom;
         final editing = tester
             .widgetList<EditableText>(find.byType(EditableText))
             .any((field) => field.focusNode.hasFocus);
@@ -95,13 +109,15 @@ void main() {
               platformInset == 0 &&
               rootMedia.viewInsets.bottom == 0 &&
               (panelMedia?.viewInsets.bottom ?? 0) == 0 &&
-              (viewport == null || viewport.bottom == expectedBottom),
+              (bottomDelta == null ||
+                  bottomDelta.abs() <= precisionErrorTolerance),
           viewport: viewport,
           details:
               'platformInset=$platformInset, '
               'rootInset=${rootMedia.viewInsets.bottom}, '
               'panelInset=${panelMedia?.viewInsets.bottom}, '
               'viewport=$viewport, expectedBottom=$expectedBottom, '
+              'viewportBottom=${viewport?.bottom}, bottomDelta=$bottomDelta, '
               'editing=$editing',
         );
       }
@@ -122,7 +138,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 100));
           metrics = keyboardViewport();
           restoredFrames = metrics.ready
-              ? metrics.viewport == previousViewport
+              ? sameViewport(metrics.viewport, previousViewport)
                     ? restoredFrames + 1
                     : 1
               : 0;
@@ -130,7 +146,10 @@ void main() {
           if (restoredFrames >= 10) {
             await settle();
             final settled = keyboardViewport();
-            if (settled.ready && settled.viewport == metrics.viewport) return;
+            if (settled.ready &&
+                sameViewport(settled.viewport, metrics.viewport)) {
+              return;
+            }
             metrics = settled;
             restoredFrames = 0;
           }
